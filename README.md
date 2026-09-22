@@ -1,5 +1,7 @@
 # IGprepper
 
+[![tests](https://github.com/JesseHaycraft/IGprepper/actions/workflows/tests.yml/badge.svg)](https://github.com/JesseHaycraft/IGprepper/actions/workflows/tests.yml)
+
 Prepare photos for Instagram: resize, frame, done.
 
 Takes high-quality photos, resizes them to Instagram's native dimensions, adds a
