@@ -2,39 +2,28 @@
 
 [![tests](https://github.com/JesseHaycraft/IGprepper/actions/workflows/tests.yml/badge.svg)](https://github.com/JesseHaycraft/IGprepper/actions/workflows/tests.yml)
 
-Prepare photos for Instagram: resize, frame, done.
+Resizes photos for Instagram and puts a white frame around them.
 
-Takes high-quality photos, resizes them to Instagram's native dimensions, adds a
-consistent white frame, and writes upload-ready JPEGs. Batch, drag-and-drop,
-with a live preview.
+![IGprepper](docs/screenshot.png)
 
-![The main window](docs/screenshot.png)
+## Why
 
-## Why not just export from Lightroom
+Instagram wants sRGB at 1080px wide. Upload something bigger and their servers
+shrink it for you and re-compress it, with no sharpening. Upload AdobeRGB or
+Display P3 and the colours come out flat, because Instagram ignores the
+embedded profile.
 
-Three things this does that a plain export does not:
+IGprepper does the conversion and the resize itself, sharpens to make up for
+the downscale, and writes 4:4:4 JPEG so there's less left for Instagram's own
+compression to chew on. It also puts an identical border on every photo, which
+is the tedious part to do by hand.
 
-- **Converts to sRGB.** Instagram assumes sRGB and does not reliably honour
-  embedded ICC profiles, so an AdobeRGB or Display P3 export uploaded as-is
-  comes out visibly flat. This is the single most common cause of "my colours
-  died after uploading".
-- **Downscales to 1080 itself, then sharpens.** Uploading a larger file means
-  Instagram's servers downscale and recompress it for you, with no sharpening.
-  Doing it locally with Lanczos plus a measured unsharp pass keeps the detail.
-- **Encodes 4:4:4.** Instagram recompresses everything on upload. Handing it
-  4:2:0 compounds colour-edge artifacts through a second generation of loss.
+## Install
 
-And it puts the *same* border on every photo, whatever the ratio, which is the
-part that is annoying to do by hand.
+**Windows.** Download `IGprepper.exe` from the
+[latest release](../../releases/latest) and run it. Nothing else required.
 
-## Windows
-
-Download `IGprepper.exe` from the
-[latest release](../../releases/latest) and double-click it. No Python needed.
-
-## Ubuntu / Linux
-
-Four commands from a fresh machine:
+**Ubuntu / Linux.**
 
 ```bash
 sudo apt install python3-venv libxcb-cursor0
@@ -43,105 +32,58 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m igprep
 ```
 
-`libxcb-cursor0` is the one system package Qt needs beyond Python; without it
-the window fails to open and the app says so on startup.
+`libxcb-cursor0` is the only system package Qt needs. Without it the window
+won't open, and the app says so on startup.
 
-To update later: `git pull`.
-
-## macOS
-
-As for Linux, without the `apt` line.
-
-## Opening photos
-
-Drop them on the window, use **Add photos...**, or pass them on the command
-line — `python -m igprep photo.jpg`, which is also what "Open with" and a
-Linux `.desktop` launcher use.
+**macOS.** As above, minus the apt line.
 
 ## Using it
 
-Drop photos or folders onto the window, select one or more in the list, set
-their framing on the right, press **Process**.
+Drop photos on the window, or pass them on the command line with
+`python -m igprep photo.jpg`. Select one or more in the list, set the framing
+on the right, press Process.
 
-The window is divided by scope, so no setting appears twice:
+### Ratios
 
-- **Left** -- the photo list, and below it everything that applies to the whole
-  run: output width, quality, sharpening, destination, filenames, and the
-  **Process** button.
-- **Middle** -- the preview of the selected photo.
-- **Right** -- framing for the selected photo(s): ratio, fit, border, colour.
-  *Apply this framing to all photos* copies it across the list.
-
-The list is selection only; nothing in it is editable. Photos you add later
-inherit whatever the framing panel is showing.
-
-**Aspect ratios.** Instagram replaced its square profile grid with a ~3:4 one
-in 2025, so 3:4 (1080 x 1440) is the default: it is the only ratio that renders
-uncropped in both the feed and the profile grid.
-
-| Ratio | At 1080 wide | Notes |
+| Ratio | Pixels | |
 |---|---|---|
-| 1:1 | 1080 x 1080 | Loses 135px per side in the grid |
-| 4:5 | 1080 x 1350 | Tallest the feed shows; loses 33px per side in the grid |
-| 3:4 | 1080 x 1440 | Default. Uncropped everywhere |
-| 1.91:1 | 1080 x 566 | Widest allowed; heavily cropped in the grid |
-| 9:16 | 1080 x 1920 | Stories and reels, not feed |
+| 1:1 | 1080 × 1080 | loses 135px a side in the grid |
+| 4:5 | 1080 × 1350 | tallest the feed displays |
+| 3:4 | 1080 × 1440 | default; uncropped everywhere |
+| 1.91:1 | 1080 × 566 | widest allowed |
+| 9:16 | 1080 × 1920 | stories and reels |
 
-Turn on the grid overlay to see exactly what each ratio loses in the profile
-grid. The dashed area is what the thumbnail keeps; everything dimmed is cut.
+Instagram replaced its square profile grid with a 3:4 one in 2025, so 3:4 is
+the only ratio that survives the feed and the grid intact. Turn on the grid
+overlay to see what the others lose.
 
-**Border.** Measured as a percentage of canvas *width*. Since every Instagram
-canvas is the same width, a given percentage produces an identical pixel border
-at every ratio, so portraits and landscapes look identically framed side by
-side. The default 4% is 43px at 1080.
+### Border
 
-It is a per-photo setting, so consistency across your grid comes from leaving
-it alone or using *Apply this framing to all photos* -- not from the tool
-refusing to let you change it.
+A percentage of the canvas width. Every Instagram canvas is 1080 wide, so the
+same percentage produces the same pixel border at every ratio and your
+portraits and landscapes match. 4% is 43px.
 
-**Crop vs fit.** Per photo, set in the framing panel.
+### Fit or crop
 
-- *Fit* (default) scales the whole photo inside the frame and lets white fill
-  the rest, so the mat goes uneven. Nothing is lost.
-- *Crop* centre-crops to the target ratio and fills the frame. Uniform border,
-  but you lose the edges.
+Fit keeps all of the photo and lets the white mat go uneven. Crop trims to the
+target ratio for an even border. Set per photo.
 
-**Presets.** Two separate lists, one per scope. *Preset* at the top of the
-right panel saves framing — ratio, fit, border, colour — and applies it to the
-selected photos. *Output preset* above the batch settings saves width, quality,
-sharpening, destination and the filename template, and applies to the whole
-run. Picking a preset you have already selected re-applies it, which is how you
-discard edits; the list shows `(modified)` whenever the panel has drifted from
-the saved values.
+### Presets
 
-The custom name is never stored in a preset — it belongs to one batch.
+Two lists. Framing presets (ratio, fit, border, colour) apply to whatever is
+selected. Output presets (width, quality, sharpening, destination, filename)
+apply to the whole run. Choosing a preset you already have selected re-applies
+it, which is how you discard edits; the dropdown reads `(modified)` when
+you've drifted from it.
 
-**Width.** 1080 by default. 1440 is available, but organic uploads wider than
-1080 get downscaled server-side, so it usually costs quality rather than adding
-it.
+### Filenames
 
-**Filenames.** One template field, with presets for the two common cases.
+A template field taking `{name}` `{custom}` `{n}` `{ratio}` `{w}` `{h}`
+`{date}` `{time}`. Pad the counter as `{n:03}`. Two buttons fill in the common
+cases. Originals are never overwritten, whatever the collision setting says.
 
-| Token | Meaning |
-|---|---|
-| `{name}` | Original filename, without extension |
-| `{custom}` | The custom name you type |
-| `{n}` | Sequence number; pad it as `{n:03}` |
-| `{ratio}` | Aspect ratio, e.g. `3x4` |
-| `{w}` `{h}` | Output dimensions |
-| `{date}` `{time}` | From EXIF capture time, falling back to file time |
-
-The original is never overwritten, whatever the collision policy is set to.
-
-## Building the Windows executable
-
-```bash
-pip install -r requirements-dev.txt
-python build_exe.py
-```
-
-Produces `dist/IGprepper.exe` as a single file with no Python
-installation required.
+Settings and presets live in `%APPDATA%\igprep` on Windows and
+`~/.config/igprep` on Linux.
 
 ## Development
 
@@ -150,23 +92,12 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The layout keeps the image pipeline free of any UI imports:
+201 tests. The GUI ones run headless, so they need no display. CI runs the lot
+on Windows and Ubuntu for every push.
 
-```
-igprep/
-  core/       pure pipeline, fully unit-tested
-    geometry.py   canvas, border and crop maths
-    color.py      ICC handling
-    render.py     resize, sharpen, composite, encode
-    naming.py     filename templating
-    pipeline.py   ties a source file to a written output
-    settings.py   persisted preferences
-  gui/        PySide6 application
-tests/
-```
+`igprep/core/` holds the image pipeline and imports nothing from the UI, so it
+can be tested on its own. `igprep/gui/` is the PySide6 app. The order of
+operations in the pipeline matters, and is written down in [SPEC.md](SPEC.md).
 
-Processing order matters and is deliberate; it is documented in
-[SPEC.md](SPEC.md).
-
-The GUI tests run headless against Qt's offscreen platform, so `pytest` needs
-no display.
+`python build_exe.py` builds the Windows executable. Pushing a `v*` tag makes
+GitHub build it and attach it to a release.
