@@ -1,0 +1,24 @@
+[project]
+name = "igprep"
+version = "0.1.0"
+description = "IGprepper - resize photos for Instagram with a consistent white frame"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["Pillow>=11", "PySide6>=6.9"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyinstaller>=6"]
+
+[project.gui-scripts]
+igprep = "igprep.gui.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["igprep*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::SyntaxWarning"]

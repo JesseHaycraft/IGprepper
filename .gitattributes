@@ -1,0 +1,6 @@
+# Normalise line endings in the repo so a Windows commit and a Linux
+# checkout agree. Binary files are marked so git never touches them.
+* text=auto
+*.png binary
+*.jpg binary
+*.ico binary

@@ -1,0 +1,60 @@
+name: tests
+
+# Runs the whole suite on Windows and Ubuntu for every push, so a change that
+# breaks Linux is caught the same day rather than months later on a laptop.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported Ubuntu, not latest: glibc is forward- but not
+        # backward-compatible, so binaries built here run on newer releases.
+        os: [windows-latest, ubuntu-22.04]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Qt's X11 libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 xvfb
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run the test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q
+
+      - name: Open the real window under a virtual display
+        # The suite runs offscreen, which never exercises the X11 plugin --
+        # the usual way a Qt app fails on a fresh Linux box.
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a python -c "
+          from PySide6.QtWidgets import QApplication
+          from igprep.gui.main import MainWindow
+          app = QApplication([])
+          window = MainWindow()
+          window.show()
+          assert window.windowTitle() == 'IGprepper'
+          print('opened using the', QApplication.platformName(), 'platform')
+          "
