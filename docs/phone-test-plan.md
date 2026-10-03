@@ -1,6 +1,25 @@
 # Phone test app: plan
 
-Status: **in progress.** Build 1 passed on a Pixel 7; Build 2 is published.
+Status: **Gates 1 to 3 answered; Build 3 published.** See *Outcome* below.
+
+## Outcome
+
+- **Delivery works.** Builds reach the phone through GitHub alone, install
+  over one another, and the log file is reachable.
+- **Proton Drive does not offer its folders to other apps.** It is absent
+  from Android's folder picker: its storage plug-in supports picking and
+  creating individual files, but not granting a folder. The organising
+  feature therefore cannot target Proton Drive today.
+- **The app works with storage that does.** Against Google Drive on a Pixel 7,
+  every folder and file operation passed. Nothing in the app is specific to
+  one storage: it works inside whichever folder is chosen in the picker, so
+  moving to Proton Drive later means choosing a different folder.
+- **The image pipeline is correct on the phone**, with one substitution: the
+  image library's Android build has no colour engine, so Android's own decoder
+  converts to sRGB. Its results matched the desktop exactly for Display P3 and
+  Adobe RGB.
+
+The app continues on Google Drive until Proton Drive adds folder access.
 
 A small Android app whose only job is to answer three questions before any
 real phone app is written:
