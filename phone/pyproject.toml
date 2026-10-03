@@ -31,7 +31,10 @@ min_os_version = "29"
 
 # Toga's Android widgets are built on the Material library. Left unset,
 # Briefcase falls back to an old default list that does not include it.
-base_theme = "Theme.MaterialComponents.Light.DarkActionBar"
+#
+# The un-suffixed theme is Material's dark one. Naming it outright, rather
+# than a day/night theme, keeps the app dark whatever the phone is set to.
+base_theme = "Theme.MaterialComponents"
 build_gradle_dependencies = [
     "com.google.android.material:material:1.12.0",
     "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0",

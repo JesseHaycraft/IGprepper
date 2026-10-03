@@ -633,6 +633,7 @@ class IGprepperTest(toga.App):
             await self.create_folder()
             await self.open_selected()
             await self.write_test_files()
+            await self.hold_for_screenshot("main-screen")
             await self.self_test_framing()
             await self.go_up()
 
@@ -646,6 +647,15 @@ class IGprepperTest(toga.App):
         finally:
             log.write("=== Self-test finished ===")
 
+
+    async def hold_for_screenshot(self, name: str) -> None:
+        """Stand still while the build's emulator run photographs the screen.
+
+        Nothing else can show whether the app looks right -- dark, with
+        unavailable buttons visibly greyed -- before a build is published.
+        """
+        self.log.write(f"SCREENSHOT {name}")
+        await asyncio.sleep(10)
 
     async def self_test_framing(self) -> None:
         """Frame a photo as a person would, plus a check they could not see."""
@@ -692,6 +702,13 @@ class IGprepperTest(toga.App):
         log.write(
             f"{'PASS' if shown else 'FAIL'}  The framing screen opened with a preview."
         )
+        # Asked of Android itself, not of this app's own record of it.
+        next_off = not bool(self.next_btn._impl.native.isEnabled())
+        log.write(
+            f"{'PASS' if next_off else 'FAIL'}  With one photo chosen, "
+            "Next photo is switched off."
+        )
+        await self.hold_for_screenshot("framing-one-photo")
 
         self.ratio_select.value = next(
             label for label, key in self.ratio_choices.items() if key == "1:1"

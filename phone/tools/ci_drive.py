@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 ADB = sys.argv[1]
 SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 300
@@ -23,6 +24,10 @@ TEST_PHOTO = "igprepper-test-photo.jpg"
 
 # Buttons to press whenever they are on screen, matched on their whole label.
 BUTTONS = ("use this folder", "allow", "select", "open")
+
+SHOTS = Path("screenshots")
+SHOT_REQUEST = re.compile(r"SCREENSHOT (\S+)")
+captured: set[str] = set()
 
 TAG = re.compile(r"<node\b([^>]*)>")
 ATTRIBUTE = re.compile(r'([\w-]+)="([^"]*)"')
@@ -39,6 +44,24 @@ def adb(*args: str) -> str:
 def newest_log() -> str:
     name = adb("shell", f"ls -t {LOGS}/*.txt 2>/dev/null | head -1").strip()
     return adb("shell", "cat", name) if name else ""
+
+
+def capture_requested(log: str) -> bool:
+    """Photograph the screen for each request in the log not yet honoured."""
+    took = False
+    for name in SHOT_REQUEST.findall(log):
+        if name in captured:
+            continue
+        captured.add(name)
+        time.sleep(2)  # let the screen settle after the request was logged
+        png = subprocess.run(
+            [ADB, "exec-out", "screencap", "-p"], capture_output=True
+        ).stdout
+        SHOTS.mkdir(exist_ok=True)
+        (SHOTS / f"{name}.png").write_bytes(png)
+        print(f"captured {name} ({len(png)} bytes)", flush=True)
+        took = True
+    return took
 
 
 def screen() -> list[dict]:
@@ -97,11 +120,14 @@ def describe(nodes: list[dict]) -> None:
 def main() -> int:
     deadline = time.time() + SECONDS
     while time.time() < deadline:
-        if FINISHED in newest_log():
+        log = newest_log()
+        if FINISHED in log:
             print("the self-test finished", flush=True)
             return 0
+        if capture_requested(log):
+            continue
         pressed = act(screen())
-        time.sleep(2 if pressed else 4)
+        time.sleep(1 if pressed else 2)
 
     print("Timed out waiting for the self-test. On screen:")
     describe(screen())

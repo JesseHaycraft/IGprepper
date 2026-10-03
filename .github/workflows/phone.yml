@@ -245,6 +245,14 @@ jobs:
           grep -q "=== Self-test finished ===" app-log.txt \
             || { echo "The self-test did not reach its end."; exit 1; }
 
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+
       - name: Keep the build
         uses: actions/upload-artifact@v7
         with:
