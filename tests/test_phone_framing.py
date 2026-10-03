@@ -11,6 +11,7 @@ PHONE_SRC = Path(__file__).resolve().parents[1] / "phone" / "src"
 sys.path.insert(0, str(PHONE_SRC))
 
 from igprep.core import color  # noqa: E402
+from igprep.core import geometry as g  # noqa: E402
 from igprep.core.settings import Framing  # noqa: E402
 from igprep.core.srgb_profile import SRGB_BYTES  # noqa: E402
 from igprepper import framing  # noqa: E402
@@ -131,3 +132,59 @@ def test_output_name_survives_odd_source_names():
     assert framing.output_name("no-extension", []) == "no-extension_ig.jpg"
     assert framing.output_name(".jpg", []) == "photo_ig.jpg"
     assert framing.output_name("a/b:c.jpeg", []) == "a-b-c_ig.jpg"
+
+
+# --- turning and tilting ---------------------------------------------------
+
+def test_frame_turns_a_photo_on_its_side():
+    image = Image.new("RGB", (3000, 2000), (40, 90, 160))
+    image.paste((230, 30, 30), (0, 0, 750, 500))
+    result = framing.frame(
+        image, Framing(ratio="1:1", mode="fit", border_pct=0), g.Placement(angle=90)
+    )
+    with Image.open(io.BytesIO(result.jpeg)) as saved:
+        # Now a tall photo, centred in the square, red corner at the top right.
+        assert saved.getpixel((880, 20))[0] > 200
+        assert saved.getpixel((200, 20))[0] < 100
+        assert saved.getpixel((20, 540)) == (255, 255, 255)
+
+
+def test_frame_without_a_placement_is_unchanged_by_one_left_alone():
+    image = Image.new("RGB", (3000, 2000), (200, 90, 60))
+    assert framing.frame(image, Framing()).jpeg == framing.frame(
+        image, Framing(), g.Placement()
+    ).jpeg
+
+
+def test_a_tilted_photo_fills_the_frame_in_fit_mode():
+    image = Image.new("RGB", (3000, 2000), (200, 90, 60))
+    result = framing.frame(image, Framing(mode="fit"), g.Placement(angle=5))
+    with Image.open(io.BytesIO(result.jpeg)) as saved:
+        # Fit mode would leave white above and below a wide photo.
+        assert saved.getpixel((540, 60))[0] < 230
+        assert saved.getpixel((540, 20)) == (255, 255, 255)  # the frame itself
+
+
+def test_preview_follows_the_placement():
+    image = Image.new("RGB", (3000, 2000), (40, 90, 160))
+    image.paste((230, 30, 30), (0, 0, 750, 500))
+    chosen = Framing(ratio="1:1", mode="fit", border_pct=0)
+    turned = framing.preview(image, chosen, g.Placement(angle=180))
+    assert turned.getpixel((580, 480))[0] > 200  # the red corner, now bottom right
+
+
+def test_guided_preview_keeps_its_size_and_leaves_the_original_alone():
+    image = Image.new("RGB", (3000, 2000), (40, 90, 160))
+    plain = framing.preview(image, Framing(mode="crop"))
+    before = plain.tobytes()
+    guided = framing.guided(plain, Framing(mode="crop"))
+    assert guided.size == plain.size
+    assert guided.tobytes() != before and plain.tobytes() == before
+
+
+@pytest.mark.parametrize(
+    "angle,label",
+    [(0, "0°"), (1, "+1°"), (-1, "−1°"), (90, "+90°"), (-137, "−137°"), (180, "+180°")],
+)
+def test_angle_label(angle, label):
+    assert framing.angle_label(angle) == label

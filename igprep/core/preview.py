@@ -11,12 +11,17 @@ preview from the same code.
 
 from __future__ import annotations
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from . import geometry as g
+from .render import place
 
 PREVIEW_CANVAS_WIDTH = 600
 PROXY_MAX = 1600
+
+# Guide lines for levelling a photo: this many squares across the short side.
+GUIDE_CELLS = 6
+GUIDE_DASH = 6
 
 
 def make_proxy(image: Image.Image, max_side: int = PROXY_MAX) -> Image.Image:
@@ -34,6 +39,7 @@ def render_preview(
     mode: str,
     frame_color: str,
     width: int = PREVIEW_CANVAS_WIDTH,
+    placement: g.Placement | None = None,
 ) -> Image.Image:
     """Compose the proxy into a scale model of the finished canvas."""
     layout = g.plan(
@@ -42,13 +48,56 @@ def render_preview(
         width=width,
         border_pct=border_pct,
         mode=mode,
+        placement=placement,
     )
-    img = proxy
-    if layout.crop is not None:
-        img = img.crop(layout.crop)
+    img = place(proxy, layout)
     if img.size != layout.scaled:
         img = img.resize(layout.scaled, Image.Resampling.LANCZOS)
 
     canvas = Image.new("RGB", layout.canvas, frame_color)
     canvas.paste(img, layout.origin)
     return canvas
+
+
+def guide_lines(size: tuple[int, int], border: int) -> tuple[list[int], list[int]]:
+    """Where the guide lines go: x positions, then y positions.
+
+    Squares, counted out from the middle, so that one line of each kind runs
+    through the exact centre whatever the shape of the frame.
+    """
+    left, top, right, bottom = border, border, size[0] - border, size[1] - border
+    spacing = min(right - left, bottom - top) / GUIDE_CELLS
+
+    def along(low: int, high: int) -> list[int]:
+        middle = (low + high) / 2
+        reach = int((high - low) / 2 / spacing)
+        lines = (round(middle + n * spacing) for n in range(-reach, reach + 1))
+        return [p for p in lines if low < p < high]
+
+    return along(left, right), along(top, bottom)
+
+
+def with_guides(preview: Image.Image, border_pct: float) -> Image.Image:
+    """A copy of a preview with dashed guide lines over the photo.
+
+    Each line is dark with light dashes on it, so it shows against sky and
+    shadow alike.
+    """
+    border = g.border_px(preview.width, border_pct)
+    left, top = border, border
+    right, bottom = preview.width - border - 1, preview.height - border - 1
+    xs, ys = guide_lines(preview.size, border)
+
+    overlay = Image.new("RGBA", preview.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    dark, light = (0, 0, 0, 120), (255, 255, 255, 235)
+    for x in xs:
+        draw.line([(x, top), (x, bottom)], fill=dark)
+        for y in range(top, bottom + 1, 2 * GUIDE_DASH):
+            draw.line([(x, y), (x, min(y + GUIDE_DASH - 1, bottom))], fill=light)
+    for y in ys:
+        draw.line([(left, y), (right, y)], fill=dark)
+        for x in range(left, right + 1, 2 * GUIDE_DASH):
+            draw.line([(x, y), (min(x + GUIDE_DASH - 1, right), y)], fill=light)
+
+    return Image.alpha_composite(preview.convert("RGBA"), overlay).convert("RGB")

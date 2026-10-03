@@ -1,6 +1,7 @@
 # Crop and rotate: plan
 
-Status: **planned, not built.**
+Status: **the arithmetic and the rotation buttons are built. Pinch and drag
+are next.**
 
 Position a photo inside its frame by hand: pinch to zoom, drag to move,
 buttons to rotate by 1 degree or by 90. Built first for the phone, but the
@@ -12,8 +13,7 @@ arithmetic lives in `igprep/core`, so the desktop app can use it later.
 
 | Value | Meaning | Default |
 |---|---|---|
-| `turns` | Quarter turns, 0 to 3 | 0 |
-| `angle` | Fine rotation in whole degrees, -45 to 45 | 0 |
+| `angle` | Rotation in whole degrees, clockwise, all the way round | 0 |
 | `zoom` | 1.0 is "just fills the frame"; larger zooms in | 1.0 |
 | `offset_x`, `offset_y` | Where the frame sits on the photo, -1 to 1, 0 centred | 0, 0 |
 
@@ -24,6 +24,13 @@ produce a file identical to what the app writes now.
 
 Ratio, border and frame colour stay as they are. Placement is separate and
 belongs to one photo.
+
+There is one angle, and it has no limit: 1 degree steps carry on past 45,
+past 90, and round again. Underneath, every angle is treated as some number
+of quarter turns plus a tilt of at most 45 degrees either way, because the
+quarter turns cost nothing in quality. 44 is a tilt of 44; 46 is a quarter
+turn and a tilt of 44 the other way. A test checks the two routes meet
+without a seam.
 
 ## 2. The rules
 
@@ -37,9 +44,11 @@ belongs to one photo.
   frame at all stays at zoom 1 and keeps its existing "will enlarge" warning.
 - **90 degree turns are exact.** They rearrange pixels and lose nothing, and
   work in fit mode too.
-- **Pinching or dragging means crop.** Fit mode shows the whole photo with
-  white around it, so there is nothing to position. The first pinch, drag or
-  1 degree step switches that photo to crop. Reset puts it back.
+- **A positioned photo fills the frame.** Fit mode shows the whole photo with
+  white around it, so there is nothing to position. A photo that is tilted,
+  zoomed or moved is cropped to fill whatever the fit setting says; put back
+  as it was, it follows the fit setting again. Nothing is switched, so
+  nothing needs switching back.
 
 ## 3. The arithmetic
 
@@ -66,8 +75,11 @@ The preview uses the same function at preview size, as it does today.
 ## 4. The phone screen
 
 - **One finger** drags the photo. **Two fingers** zoom and drag together.
-- A row of buttons under the preview:
-  `90 left`, `1 left`, the current angle, `1 right`, `90 right`, `Reset`.
+- A row of buttons under the preview: `-90`, `-1`, the current angle, `+1`,
+  `+90`. Minus is anticlockwise.
+- Pressing the angle puts the photo back: level, centred, not zoomed.
+- While rotating, dashed guide lines are drawn over the photo to level it
+  against. They stay for 3 seconds after the last press, then go.
 - Each photo keeps its own placement as you step through a batch.
 
 While fingers are moving, the phone itself moves the picture, so it tracks
@@ -88,8 +100,9 @@ depends on it.
    tilted rendering, limits and clamping. Tests include: default placement
    reproduces today's output exactly; a marked image lands where the
    placement says after every turn and tilt; preview and final output agree.
-2. **Phone build A**: the rotate buttons and Reset, driven by the new core.
-   No gestures yet. Low risk, and useful by itself.
+   *Done.*
+2. **Phone build A**: the rotation buttons and guide lines, driven by the new
+   core. No gestures yet. *Done.*
 3. **Phone build B**: one-finger drag and two-finger pinch. Tried on the
    Pixel for smoothness before being called done.
 4. **Later**: the same controls in the desktop app.
@@ -101,4 +114,4 @@ code directly there, and by hand on the phone.
 ## 6. Not included
 
 Free-form (non-rectangular) crops, perspective correction, flipping, and
-rotation beyond 45 degrees except by quarter turns.
+angles finer than a whole degree.

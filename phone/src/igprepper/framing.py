@@ -18,7 +18,7 @@ from PIL import Image
 
 from igprep.core import geometry as g
 from igprep.core import naming, render
-from igprep.core.preview import make_proxy, render_preview
+from igprep.core.preview import make_proxy, render_preview, with_guides
 from igprep.core.settings import Framing
 
 OUTPUT_WIDTH = 1080
@@ -68,7 +68,12 @@ class Framed:
     upscaled: bool
 
 
-def frame(image: Image.Image, framing: Framing, width: int = OUTPUT_WIDTH) -> Framed:
+def frame(
+    image: Image.Image,
+    framing: Framing,
+    placement: g.Placement | None = None,
+    width: int = OUTPUT_WIDTH,
+) -> Framed:
     """Run a prepared image through the pipeline and encode the result."""
     layout = g.plan(
         image.size,
@@ -76,6 +81,7 @@ def frame(image: Image.Image, framing: Framing, width: int = OUTPUT_WIDTH) -> Fr
         width=width,
         border_pct=framing.border_pct,
         mode=framing.mode,
+        placement=placement,
     )
     canvas = render.render(
         image, layout, frame_color=framing.frame_color, sharpen=SHARPEN
@@ -91,7 +97,9 @@ def frame(image: Image.Image, framing: Framing, width: int = OUTPUT_WIDTH) -> Fr
     )
 
 
-def preview(image: Image.Image, framing: Framing) -> Image.Image:
+def preview(
+    image: Image.Image, framing: Framing, placement: g.Placement | None = None
+) -> Image.Image:
     """A small scale model of the framed result, for the screen."""
     return render_preview(
         make_proxy(image),
@@ -99,7 +107,19 @@ def preview(image: Image.Image, framing: Framing) -> Image.Image:
         border_pct=framing.border_pct,
         mode=framing.mode,
         frame_color=framing.frame_color,
+        placement=placement,
     )
+
+
+def guided(preview_image: Image.Image, framing: Framing) -> Image.Image:
+    """The preview with dashed lines over the photo, for levelling it."""
+    return with_guides(preview_image, framing.border_pct)
+
+
+def angle_label(angle: int) -> str:
+    """How far a photo is turned, as shown on the middle button."""
+    sign = "" if angle == 0 else "+" if angle > 0 else "\u2212"
+    return f"{sign}{abs(angle)}\u00b0"
 
 
 def output_name(source_name: str, taken) -> str:

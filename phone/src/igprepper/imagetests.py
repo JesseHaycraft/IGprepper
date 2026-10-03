@@ -141,6 +141,77 @@ def check_pipeline(log) -> bool:
     return passed
 
 
+def check_rotation(log) -> bool:
+    """Turning and tilting: does the photo land where the arithmetic says?"""
+    passed = True
+
+    def verdict(label: str, ok: bool, detail: str) -> None:
+        nonlocal passed
+        passed = passed and ok
+        log.write(f"{'PASS' if ok else 'FAIL'}  {label}: {detail}")
+
+    def framed(source, angle, mode="crop", ratio="1:1"):
+        layout = g.plan(
+            source.size, ratio=g.ratio_for(ratio), width=1080, border_pct=0,
+            mode=mode, placement=g.Placement(angle=angle),
+        )
+        return render.render(source, layout, frame_color="#FFFFFF", sharpen=0), layout
+
+    scene = make_test_photo(1500, 1000)
+    plain, _ = _frame(scene, "crop")
+    layout = g.plan(
+        scene.size, ratio=g.ratio_for("3:4"), width=1080, border_pct=4.0,
+        mode="crop", placement=g.Placement(),
+    )
+    same = render.render(scene, layout, frame_color="#FFFFFF", sharpen=30)
+    verdict("A photo left alone", plain.tobytes() == same.tobytes(),
+            "identical to the output before rotation existed")
+
+    # A red corner, to follow round.
+    marked = Image.new("RGB", (800, 600), (40, 90, 160))
+    marked.paste((230, 30, 30), (0, 0, 200, 150))
+    corners = {0: "top left", 90: "top right", 180: "bottom right", -90: "bottom left"}
+    for angle, expected in corners.items():
+        out, where = framed(marked, angle, mode="fit")
+        x0, y0 = where.origin
+        w, h = where.scaled
+        spots = {
+            "top left": (x0 + 20, y0 + 20),
+            "top right": (x0 + w - 20, y0 + 20),
+            "bottom right": (x0 + w - 20, y0 + h - 20),
+            "bottom left": (x0 + 20, y0 + h - 20),
+        }
+        found = [name for name, at in spots.items() if out.getpixel(at)[0] > 200]
+        verdict(f"Turned {angle} degrees", found == [expected],
+                f"the top-left corner is now {' and '.join(found) or 'nowhere'}")
+
+    # Anything fetched from beyond the photo's edge would come back black.
+    white = Image.new("RGB", (900, 700), WHITE)
+    darkest = 255
+    for angle in (1, -7, 20, 45, -45, 63, 170):
+        out, _ = framed(white, angle)
+        darkest = min(darkest, min(low for low, _ in out.getextrema()))
+    verdict("No empty corners at any tilt", darkest == 255,
+            f"darkest pixel {darkest} of 255")
+
+    # A level line, tilted ten degrees clockwise: its right end drops.
+    lined = Image.new("RGB", (2000, 2000), WHITE)
+    ImageDraw.Draw(lined).line([(0, 1000), (2000, 1000)], fill=(0, 0, 0), width=9)
+    out, _ = framed(lined, 10)
+
+    def line_at(x: int) -> float:
+        dark = [y for y in range(out.height) if out.getpixel((x, y))[0] < 128]
+        return sum(dark) / len(dark) if dark else -1.0
+
+    left, right = line_at(240), line_at(840)
+    # 300 pixels either side of centre, at ten degrees: 52.9 up and down.
+    ok = abs(left - (539.5 - 52.9)) < 2.5 and abs(right - (539.5 + 52.9)) < 2.5
+    verdict("A 10 degree tilt", ok,
+            f"a level line runs from {left:.1f} to {right:.1f}; "
+            "exact would be 486.6 to 592.4")
+    return passed
+
+
 def check_colour(log, convert=None) -> bool:
     """Do tagged images come out as the sRGB values the desktop produces?
 
@@ -203,6 +274,17 @@ def check_speed(log, size: tuple[int, int] = (4080, 3072)) -> float:
         f"A {megapixels:.1f} MP photo: framed in {framed - started:.2f} s, "
         f"saved in {finished - framed:.2f} s ({len(data) / 1024:.0f} KB)"
     )
+
+    layout = g.plan(
+        source.size, ratio=g.ratio_for("3:4"), width=1080, border_pct=4.0,
+        mode="crop", placement=g.Placement(angle=3),
+    )
+    tilt_started = time.perf_counter()
+    render.render(source, layout, frame_color="#FFFFFF", sharpen=30)
+    log.write(
+        f"The same photo tilted 3 degrees: framed in "
+        f"{time.perf_counter() - tilt_started:.2f} s"
+    )
     return finished - started
 
 
@@ -213,6 +295,13 @@ def run_all(log, convert=None) -> bool:
     except Exception:
         log.exception("checking the pipeline")
         pipeline_ok = False
+
+    log.section("Rotation")
+    try:
+        rotation_ok = check_rotation(log)
+    except Exception:
+        log.exception("checking rotation")
+        rotation_ok = False
 
     log.section("Colour conversion")
     try:
@@ -227,4 +316,4 @@ def run_all(log, convert=None) -> bool:
     except Exception:
         log.exception("timing the pipeline")
 
-    return pipeline_ok and colour_ok
+    return pipeline_ok and rotation_ok and colour_ok

@@ -4,9 +4,9 @@ It works inside whichever folder is chosen in Android's folder picker, so it
 is tied to no particular storage. Today that means Google Drive or the phone
 itself; Proton Drive does not yet offer its folders to other apps.
 
-Build 3 adds the app's actual purpose: choose photos, frame them with a live
-preview, and save the results into the current folder and the phone's
-gallery. The diagnostic buttons from the earlier builds remain.
+Its purpose: choose photos, frame them with a live preview, turn or tilt
+each one as needed, and save the results into the current folder and the
+phone's gallery. The diagnostic buttons from the earlier builds remain.
 
 The app never invents a folder name. Folders are created only when a name is
 typed and the button pressed, exactly as typed.
@@ -45,6 +45,11 @@ from .phonelog import PhoneLog
 BUTTON_ON = {"color": "#FFFFFF", "background_color": "#56575C"}
 BUTTON_OFF = {"color": "#6F7075", "background_color": "#232427"}
 FIT_CHOICES = {"Fit the whole photo": "fit", "Crop to fill the frame": "crop"}
+# The rotation buttons, left to right, either side of the angle itself.
+TURN_LEFT = (("\u221290\u00b0", -90), ("\u22121\u00b0", -1))
+TURN_RIGHT = (("+1\u00b0", 1), ("+90\u00b0", 90))
+# How long the guide lines stay after the last press of a rotation button.
+GUIDE_SECONDS = 3
 LARGE_FILE_MB = 20
 SELF_TEST_FOLDER = "Download/IGprepper"
 
@@ -68,6 +73,13 @@ class IGprepperTest(toga.App):
         self.picked: list[tuple[object, str]] = []
         self.proxies: dict[int, Image.Image] = {}
         self.preview_index = 0
+        # How each photo has been turned. Ratio, fit and border are shared by
+        # the batch; this belongs to one photo.
+        self.placements: dict[int, g.Placement] = {}
+        self.preview_plain: Image.Image | None = None
+        self.guides_showing = False
+        self.guide_timer = None
+        self.guide_seconds = GUIDE_SECONDS
 
         self.build_screen()
         self.build_framing_screen()
@@ -133,6 +145,27 @@ class IGprepperTest(toga.App):
         self.batch_label = toga.Label("")
         self.preview_view = toga.ImageView(style=Pack(flex=1, margin_top=6))
 
+        def turner(degrees: int):
+            return lambda widget: self.rotate(degrees)
+
+        def turn_button(label: str, degrees: int) -> toga.Button:
+            return toga.Button(label, on_press=turner(degrees), style=Pack(flex=1))
+
+        # The middle button shows the angle; pressing it puts the photo back.
+        self.angle_btn = toga.Button(
+            framing.angle_label(0), on_press=self.recentre, style=Pack(flex=1)
+        )
+        self.turn_btns = (
+            [turn_button(*spec) for spec in TURN_LEFT]
+            + [self.angle_btn]
+            + [turn_button(*spec) for spec in TURN_RIGHT]
+        )
+        for button in self.turn_btns:
+            self.guard("narrowing a rotation button", lambda b=button: self.narrow(b))
+        turning = toga.Box(
+            children=self.turn_btns, style=Pack(direction=ROW, margin_top=6)
+        )
+
         self.ratio_choices = {f"{r.key}  {r.label}": r.key for r in g.RATIOS}
         self.ratio_select = toga.Selection(
             items=list(self.ratio_choices), on_change=self.update_preview,
@@ -176,7 +209,7 @@ class IGprepperTest(toga.App):
 
         self.framing_box = toga.Box(
             children=[
-                self.batch_label, self.preview_view, choices, border,
+                self.batch_label, self.preview_view, turning, choices, border,
                 self.gallery_switch, actions,
             ],
             style=Pack(direction=COLUMN, margin=12),
@@ -219,6 +252,17 @@ class IGprepperTest(toga.App):
         window.setStatusBarColor(Color.BLACK)
         window.setNavigationBarColor(Color.BLACK)
 
+    def narrow(self, button) -> None:
+        """Let a button be as narrow as its label, so five fit in a row.
+
+        Android gives every button a generous minimum width, and five of
+        those are wider than the screen.
+        """
+        native = button._impl.native
+        native.setMinWidth(0)
+        native.setMinimumWidth(0)
+        button.refresh()
+
     def switch(self, button, on: bool) -> None:
         """Enable or disable a button, and make the difference visible."""
         button.enabled = on
@@ -233,6 +277,8 @@ class IGprepperTest(toga.App):
         self.switch(self.back_btn, free)
         self.switch(self.save_btn, free and bool(self.picked))
         self.switch(self.next_btn, free and len(self.picked) > 1)
+        for button in self.turn_btns:
+            self.switch(button, free and bool(self.picked))
         self.switch(self.open_btn, free and have_folder and bool(self.subfolders))
         self.switch(self.up_btn, free and len(self.trail) > 1)
         self.switch(self.create_btn, free and have_folder)
@@ -490,6 +536,7 @@ class IGprepperTest(toga.App):
             name = await self.work(storage.display_name, address)
             self.picked.append((address, name))
         self.proxies = {}
+        self.placements = {}
         self.preview_index = 0
         self.log.write(f"{len(self.picked)} photo(s) chosen. Names are not logged.")
         await self.show_photo()
@@ -510,19 +557,76 @@ class IGprepperTest(toga.App):
                 f"Photo {index + 1}: opened at {size[0]} x {size[1]} in "
                 f"{time.perf_counter() - started:.2f} s"
             )
-        self.batch_label.text = f"Photo {index + 1} of {len(self.picked)}"
+        self.clear_guides()
         self.update_preview()
+
+    def placement(self) -> g.Placement:
+        return self.placements.get(self.preview_index, g.Placement())
 
     def update_preview(self, widget=None) -> None:
         proxy = self.proxies.get(self.preview_index)
         if proxy is None:
             return
         try:
-            chosen = self.current_framing()
+            chosen, placement = self.current_framing(), self.placement()
             self.border_label.text = f"Border {chosen.border_pct:g}%"
-            self.preview_view.image = toga.Image(framing.preview(proxy, chosen))
+            self.angle_btn.text = framing.angle_label(placement.angle)
+            note = ""
+            if placement.positioned and chosen.mode == "fit":
+                # A tilted photo shown whole would have empty corners.
+                note = " - tilted, so it fills the frame"
+            self.batch_label.text = (
+                f"Photo {self.preview_index + 1} of {len(self.picked)}{note}"
+            )
+            self.preview_plain = framing.preview(proxy, chosen, placement)
+            self.draw_preview()
         except Exception:
             self.log.exception("drawing the preview")
+
+    def draw_preview(self) -> None:
+        image = self.preview_plain
+        if image is None:
+            return
+        if self.guides_showing:
+            image = framing.guided(image, self.current_framing())
+        self.preview_view.image = toga.Image(image)
+
+    # --- turning a photo ------------------------------------------------------
+
+    def rotate(self, degrees: int) -> None:
+        if self.busy or not self.picked:
+            return
+        self.placements[self.preview_index] = self.placement().rotated(degrees)
+        self.show_guides()
+        self.update_preview()
+
+    def recentre(self, widget=None) -> None:
+        """Put the photo back as it was opened: level and centred."""
+        if self.busy or not self.picked:
+            return
+        self.placements.pop(self.preview_index, None)
+        self.clear_guides()
+        self.update_preview()
+
+    def show_guides(self) -> None:
+        """Dashed lines to level against, until the buttons have been left
+        alone for a few seconds."""
+        self.guides_showing = True
+        if self.guide_timer is not None:
+            self.guide_timer.cancel()
+        self.guide_timer = self.loop.call_later(self.guide_seconds, self.hide_guides)
+
+    def clear_guides(self) -> None:
+        self.guides_showing = False
+        if self.guide_timer is not None:
+            self.guide_timer.cancel()
+            self.guide_timer = None
+
+    def hide_guides(self) -> None:
+        showing = self.guides_showing
+        self.clear_guides()
+        if showing:
+            self.guard("hiding the guide lines", self.draw_preview)
 
     async def next_photo(self, widget=None) -> None:
         await self.exclusively("showing the next photo", self._next_photo())
@@ -531,8 +635,13 @@ class IGprepperTest(toga.App):
         self.preview_index = (self.preview_index + 1) % len(self.picked)
         await self.show_photo()
 
+    def forget_photos(self) -> None:
+        self.clear_guides()
+        self.picked, self.proxies, self.placements = [], {}, {}
+        self.preview_plain = None
+
     async def leave_framing(self, widget=None) -> None:
-        self.picked, self.proxies = [], {}
+        self.forget_photos()
         self.main_window.content = self.main_box
         self.refresh_controls()
 
@@ -549,14 +658,16 @@ class IGprepperTest(toga.App):
         here = self.here if self.tree is not None else None
         await self.work(
             self.save_framed_now, list(self.picked), self.current_framing(),
-            to_gallery, self.tree, here,
+            dict(self.placements), to_gallery, self.tree, here,
         )
-        self.picked, self.proxies = [], {}
+        self.forget_photos()
         self.main_window.content = self.main_box
         if self.tree is not None:
             await self.refresh_listing()
 
-    def save_framed_now(self, picked, chosen: Framing, to_gallery, tree, here) -> None:
+    def save_framed_now(
+        self, picked, chosen: Framing, placements, to_gallery, tree, here
+    ) -> None:
         """One photo at a time, start to finish, so memory stays flat."""
         log = self.log
         log.section("Saving framed photos")
@@ -576,7 +687,8 @@ class IGprepperTest(toga.App):
                     storage.read_uri(address), androidimage.decode_to_srgb
                 )
                 opened = time.perf_counter()
-                result = framing.frame(image, chosen)
+                placement = placements.get(number - 1, g.Placement())
+                result = framing.frame(image, chosen, placement)
                 framed = time.perf_counter()
 
                 out = framing.output_name(name, taken)
@@ -589,8 +701,12 @@ class IGprepperTest(toga.App):
 
                 w, h = result.source_size
                 note = ""
+                if placement.angle:
+                    note += f" Turned {placement.angle} degrees."
+                if placement.positioned and chosen.mode == "fit":
+                    note += " Tilted, so it fills the frame."
                 if result.upscaled:
-                    note = " Enlarged: the photo is smaller than the frame."
+                    note += " Enlarged: the photo is smaller than the frame."
                 log.write(
                     f"PASS  Photo {number} of {len(picked)}: {w} x {h} -> "
                     f"{result.canvas[0]} x {result.canvas[1]}, {result.border} px "
@@ -726,6 +842,7 @@ class IGprepperTest(toga.App):
             "Next photo is switched off."
         )
         await self.hold_for_screenshot("framing-one-photo")
+        await self.self_test_rotation()
 
         self.ratio_select.value = next(
             label for label, key in self.ratio_choices.items() if key == "1:1"
@@ -734,6 +851,10 @@ class IGprepperTest(toga.App):
             label for label, mode in FIT_CHOICES.items() if mode == "crop"
         )
         self.border_slider.value = 6
+        self.rotate(90)
+        self.rotate(1)
+        self.rotate(1)
+        self.clear_guides()
         await self.save_framed()
 
         after = await self.work(storage.children, self.tree, self.here)
@@ -748,6 +869,65 @@ class IGprepperTest(toga.App):
                 f"{'PASS' if square else 'FAIL'}  Saved {new[0].name!r} as "
                 f"{saved.size[0]} x {saved.size[1]}, following the settings chosen."
             )
+
+
+    async def self_test_rotation(self) -> None:
+        """Press the rotation buttons and see that the screen follows."""
+        log = self.log
+        log.section("Self-test: turning a photo")
+
+        def verdict(ok: bool, text: str) -> None:
+            log.write(f"{'PASS' if ok else 'FAIL'}  {text}")
+
+        # Asked of Android: the row must fit across the screen it is on.
+        last = self.turn_btns[-1]._impl.native
+        across = last.getParent().getWidth()
+        verdict(
+            0 < last.getRight() <= across,
+            f"The five rotation buttons fit: the last ends at {last.getRight()} "
+            f"of {across} pixels.",
+        )
+
+        # Long enough for the screen to be photographed with the lines on it.
+        self.guide_seconds = 14
+        started = time.perf_counter()
+        for _ in range(3):
+            self.rotate(1)
+        each = (time.perf_counter() - started) / 3
+        shown = self.angle_btn.text
+        verdict(
+            shown == framing.angle_label(3) and self.guides_showing,
+            f"Three presses of +1: the angle reads {shown}, the guide lines are "
+            f"{'showing' if self.guides_showing else 'NOT showing'}, and each "
+            f"press redrew the preview in {each:.2f} s.",
+        )
+        verdict(
+            "fills the frame" in self.batch_label.text,
+            "A tilted photo in fit mode is described as filling the frame.",
+        )
+        await self.hold_for_screenshot("framing-tilted")
+
+        self.guide_seconds = GUIDE_SECONDS
+        self.rotate(-90)
+        appeared = self.guides_showing
+        await asyncio.sleep(GUIDE_SECONDS - 1)
+        stayed = self.guides_showing
+        await asyncio.sleep(2)
+        verdict(
+            appeared and stayed and not self.guides_showing
+            and self.angle_btn.text == framing.angle_label(-87),
+            f"A press of -90: the angle reads {self.angle_btn.text}; the guide "
+            f"lines appeared, were still there after {GUIDE_SECONDS - 1} s, and "
+            f"had gone after {GUIDE_SECONDS + 1} s.",
+        )
+
+        self.recentre()
+        verdict(
+            self.angle_btn.text == framing.angle_label(0)
+            and not self.placements and not self.guides_showing,
+            f"A press of the angle put the photo back: it reads {self.angle_btn.text}.",
+        )
+        await self.hold_for_screenshot("framing-recentred")
 
 
 def main() -> IGprepperTest:

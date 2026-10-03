@@ -5,14 +5,22 @@ The order of operations in `render` is deliberate; see SPEC.md section 2.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageOps
 
 from . import color
-from .geometry import Layout
+from .geometry import Layout, Tilted
 
 RESAMPLE = Image.Resampling.LANCZOS
+
+# Quarter turns clockwise. The image library counts the other way round.
+_TURN = {
+    1: Image.Transpose.ROTATE_270,
+    2: Image.Transpose.ROTATE_180,
+    3: Image.Transpose.ROTATE_90,
+}
 
 # Downscaling always softens. A small radius sharpens the detail the resample
 # blurred without producing visible edge halos at 1080px.
@@ -47,6 +55,44 @@ def sharpen_percent(amount: int, scale: float) -> int:
     return int(round(amount * factor))
 
 
+def _cut_tilted(img: Image.Image, tilted: Tilted) -> Image.Image:
+    """Lift a tilted rectangle out of the photo, upright, at the photo's own
+    resolution.
+
+    This is the only resampling a tilt costs, and it happens before the
+    downscale rather than after, so the softening it causes is shrunk away
+    with everything else.
+    """
+    w, h = tilted.size
+    out = (max(1, round(w)), max(1, round(h)))
+    # Photo pixels per output pixel: 1, but for the rounding just above.
+    step_x, step_y = w / out[0], h / out[1]
+    theta = math.radians(tilted.degrees)
+    cos, sin = math.cos(theta), math.sin(theta)
+
+    # Where each output point comes from in the photo. The photo is to appear
+    # turned clockwise, so the rectangle is turned the other way to fetch it.
+    a, b = cos * step_x, sin * step_y
+    d, e = -sin * step_x, cos * step_y
+    c = tilted.center[0] - a * out[0] / 2 - b * out[1] / 2
+    f = tilted.center[1] - d * out[0] / 2 - e * out[1] / 2
+    return img.transform(
+        out, Image.Transform.AFFINE, (a, b, c, d, e, f),
+        resample=Image.Resampling.BICUBIC,
+    )
+
+
+def place(img: Image.Image, layout: Layout) -> Image.Image:
+    """Turn the photo and cut out the part of it the layout calls for."""
+    if layout.turns:
+        img = img.transpose(_TURN[layout.turns])
+    if layout.tilted is not None:
+        return _cut_tilted(img, layout.tilted)
+    if layout.crop is not None:
+        return img.crop(layout.crop)
+    return img
+
+
 def render(
     img: Image.Image,
     layout: Layout,
@@ -58,8 +104,7 @@ def render(
     img = color.to_srgb(img)
     img = color.flatten(img, frame_color)
 
-    if layout.crop is not None:
-        img = img.crop(layout.crop)
+    img = place(img, layout)
     if img.size != layout.scaled:
         img = img.resize(layout.scaled, RESAMPLE)
 

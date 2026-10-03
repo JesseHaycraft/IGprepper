@@ -55,6 +55,34 @@ def test_pipeline_check_measures_the_real_border(log):
     assert "(43, 43, 43, 43)" in log.text()
 
 
+def test_rotation_check_passes_and_reports_each_turn(log):
+    assert imagetests.check_rotation(log), log.text()
+    assert "Turned 90 degrees: the top-left corner is now top right" in log.text()
+    assert "Turned -90 degrees: the top-left corner is now bottom left" in log.text()
+
+
+def test_rotation_check_fails_when_turns_go_the_wrong_way(log, monkeypatch):
+    from igprep.core import render
+
+    backwards = {1: render._TURN[3], 2: render._TURN[2], 3: render._TURN[1]}
+    monkeypatch.setattr(render, "_TURN", backwards)
+    assert not imagetests.check_rotation(log)
+    assert "FAIL  Turned 90 degrees" in log.text()
+
+
+def test_rotation_check_fails_when_tilt_goes_the_wrong_way(log, monkeypatch):
+    from igprep.core import geometry, render
+
+    real = render._cut_tilted
+
+    def mirrored(img, tilted):
+        return real(img, geometry.Tilted(tilted.center, tilted.size, -tilted.degrees))
+
+    monkeypatch.setattr(render, "_cut_tilted", mirrored)
+    assert not imagetests.check_rotation(log)
+    assert "FAIL  A 10 degree tilt" in log.text()
+
+
 def test_framed_test_jpeg_is_a_real_instagram_sized_file():
     with Image.open(io.BytesIO(imagetests.framed_test_jpeg())) as image:
         assert image.size == (1080, 1440)
