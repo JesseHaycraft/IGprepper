@@ -31,15 +31,21 @@ LOCAL_STORAGE = "com.android.externalstorage.documents"
 
 _COLUMNS = ["document_id", "_display_name", "mime_type", "_size", "flags"]
 
-# What a storage app may or may not allow, in the order worth reading.
-_CAPABILITIES = (
-    ("create items inside", Document.FLAG_DIR_SUPPORTS_CREATE),
-    ("write", Document.FLAG_SUPPORTS_WRITE),
+# What a storage app may or may not allow, in the order worth reading. The
+# two lists differ because Android's "write" flag only ever applies to files;
+# reporting it as refused for a folder would read as a problem when it is not.
+_SHARED_CAPABILITIES = (
     ("rename", Document.FLAG_SUPPORTS_RENAME),
     ("move", Document.FLAG_SUPPORTS_MOVE),
     ("copy", Document.FLAG_SUPPORTS_COPY),
     ("delete", Document.FLAG_SUPPORTS_DELETE),
 )
+_FOLDER_CAPABILITIES = (
+    ("create items inside", Document.FLAG_DIR_SUPPORTS_CREATE),
+) + _SHARED_CAPABILITIES
+_FILE_CAPABILITIES = (
+    ("overwrite", Document.FLAG_SUPPORTS_WRITE),
+) + _SHARED_CAPABILITIES
 
 
 class StorageError(RuntimeError):
@@ -55,7 +61,8 @@ class Entry:
     flags: int
 
     def capabilities(self) -> dict[str, bool]:
-        return {label: bool(self.flags & bit) for label, bit in _CAPABILITIES}
+        table = _FOLDER_CAPABILITIES if self.is_dir else _FILE_CAPABILITIES
+        return {label: bool(self.flags & bit) for label, bit in table}
 
 
 def resolver():

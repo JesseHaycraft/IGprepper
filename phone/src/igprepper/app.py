@@ -211,7 +211,10 @@ class IGprepperTest(toga.App):
         capabilities = entry.capabilities()
         allowed = [name for name, yes in capabilities.items() if yes]
         refused = [name for name, yes in capabilities.items() if not yes]
-        self.log.write("The storage app allows: " + (", ".join(allowed) or "nothing"))
+        kind = "this folder" if entry.is_dir else "a file created here"
+        self.log.write(
+            f"For {kind}, the storage app allows: " + (", ".join(allowed) or "nothing")
+        )
         if refused:
             self.log.write("It does not allow: " + ", ".join(refused))
 
@@ -317,6 +320,7 @@ class IGprepperTest(toga.App):
                 f"{len(payload)} bytes, read back {len(back)}, "
                 f"contents {'match' if ok else 'DIFFER'}"
             )
+            self.report_capabilities(storage.describe(tree, entry.doc_id))
         except Exception:
             log.exception("writing the small test file")
 

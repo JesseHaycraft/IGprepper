@@ -1,6 +1,6 @@
 # Phone test app: plan
 
-Status: **planned, not built.**
+Status: **in progress.** Build 1 passed on a Pixel 7; Build 2 is published.
 
 A small Android app whose only job is to answer three questions before any
 real phone app is written:
@@ -132,6 +132,18 @@ Each gate only matters if the one before it passes.
    Run image tests. Covers Gates 2 and 3, and proves updating over Build 1.
 3. **Build 3**: Frame a photo, plus fixes from the first two logs. Covers
    Gates 4 and 5.
+
+## What the build checks before publishing
+
+Each build is run in an Android emulator on GitHub before it is published.
+The app tests itself there: the image checks, and every folder and file
+operation through the real system folder picker, against the emulator's own
+storage. A build that crashes or fails those checks is never published. From
+the second build on, it is also installed over the previous release, to prove
+that updating works.
+
+That covers this app's side of every operation. Only a real phone can show
+how Proton Drive answers.
 
 ## Not in this test
 
