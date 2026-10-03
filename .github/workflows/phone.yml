@@ -95,6 +95,41 @@ jobs:
           echo "apk=$name" >> "$GITHUB_OUTPUT"
           echo "signed=true" >> "$GITHUB_OUTPUT"
 
+      - name: Check the build carries no account name
+        # Builds are public. The package id and the certificate are kept free
+        # of personal names, and project metadata must not quietly put one
+        # back -- so search the whole file, including the archives inside it.
+        env:
+          APK: ${{ steps.sign.outputs.apk }}
+        run: |
+          python - <<'PY'
+          import io, os, sys, zipfile
+
+          owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower().encode()
+          found = []
+
+          def scan(data, where, depth=0):
+              if owner in data.lower():
+                  found.append(where)
+              if data[:2] == b"PK" and depth < 3:
+                  try:
+                      inner = zipfile.ZipFile(io.BytesIO(data))
+                  except zipfile.BadZipFile:
+                      return
+                  for name in inner.namelist():
+                      scan(inner.read(name), f"{where} -> {name}", depth + 1)
+
+          with open(os.environ["APK"], "rb") as fh:
+              scan(fh.read(), os.environ["APK"])
+          # The outer file always "contains" whatever its members contain.
+          found = [f for f in found if " -> " in f] or found
+          if found:
+              print("The account name appears inside the build:")
+              print("\n".join(f"  {f}" for f in found))
+              sys.exit(1)
+          print("No account name anywhere in the build.")
+          PY
+
       - name: Let the emulator use hardware acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \

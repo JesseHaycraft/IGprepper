@@ -7,12 +7,12 @@ project_name = "IGprepper"
 # anyone who downloads a build.
 bundle = "org.igprepper"
 version = "0.0.1"
-url = "https://github.com/JesseHaycraft/IGprepper"
 license = "LicenseRef-Proprietary"
 
 [tool.briefcase.app.igprepper]
 formal_name = "IGprepper"
-description = "Test app: Proton Drive folders and the IGprepper image pipeline on a phone"
+# Kept generic, like the bundle: this text is embedded in every build.
+description = "IGprepper phone test app"
 sources = ["src/igprepper"]
 requires = []
 
