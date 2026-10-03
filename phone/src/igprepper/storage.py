@@ -14,12 +14,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from android.content import Intent
+from android.content import ContentValues, Intent
 from java import jarray, jbyte, jclass
 from java.lang import String
 from org.beeware.android import MainActivity
 
 DocumentsContract = jclass("android.provider.DocumentsContract")
+GalleryImages = jclass("android.provider.MediaStore$Images$Media")
 Document = jclass("android.provider.DocumentsContract$Document")
 
 DIR_MIME = "vnd.android.document/directory"
@@ -83,22 +84,50 @@ async def pick_folder(app, initial_uri=None):
     if initial_uri is not None:
         intent.putExtra("android.provider.extra.INITIAL_URI", initial_uri)
 
+    result_code, data = await _start(app, intent)
+    if result_code != RESULT_OK or data is None:
+        return None
+    tree = data.getData()
+    resolver().takePersistableUriPermission(tree, READ_WRITE)
+    return tree
+
+
+async def _start(app, intent):
+    """Start a system screen and wait for what it hands back."""
     loop = asyncio.get_event_loop()
     finished = loop.create_future()
 
     def on_complete(result_code, data):
         loop.call_soon_threadsafe(finished.set_result, (result_code, data))
 
-    # Toga has no folder dialog on Android, so the picker is started through
-    # the same hook its own file dialogs use.
+    # Toga has no folder dialog on Android, so system pickers are started
+    # through the same hook its own file dialogs use.
     app._impl.start_activity(intent, on_complete=on_complete)
-    result_code, data = await finished
+    return await finished
 
+
+async def pick_photos(app, initial_uri=None) -> list:
+    """Show the system file picker for images; return what was chosen.
+
+    The document picker, rather than the photo picker, because it hands over
+    the file exactly as stored and can also reach photos kept in cloud
+    storage.
+    """
+    intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+    intent.addCategory(Intent.CATEGORY_OPENABLE)
+    intent.setType("image/*")
+    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
+    if initial_uri is not None:
+        intent.putExtra("android.provider.extra.INITIAL_URI", initial_uri)
+
+    result_code, data = await _start(app, intent)
     if result_code != RESULT_OK or data is None:
-        return None
-    tree = data.getData()
-    resolver().takePersistableUriPermission(tree, READ_WRITE)
-    return tree
+        return []
+    clip = data.getClipData()
+    if clip is not None:
+        return [clip.getItemAt(i).getUri() for i in range(clip.getItemCount())]
+    single = data.getData()
+    return [single] if single is not None else []
 
 
 def persisted_folder():
@@ -213,7 +242,11 @@ def _to_bytes(java_bytes, count: int) -> bytes:
 
 
 def read_bytes(tree, doc_id: str) -> bytes:
-    stream = resolver().openInputStream(_doc_uri(tree, doc_id))
+    return read_uri(_doc_uri(tree, doc_id))
+
+
+def read_uri(uri) -> bytes:
+    stream = resolver().openInputStream(uri)
     if stream is None:
         raise StorageError("The storage app would not open the file for reading")
     collected = bytearray()
@@ -227,3 +260,38 @@ def read_bytes(tree, doc_id: str) -> bytes:
     finally:
         stream.close()
     return bytes(collected)
+
+
+def display_name(uri) -> str:
+    """The filename behind an address handed over by a picker."""
+    cursor = resolver().query(uri, jarray(String)(["_display_name"]), None, None, None)
+    if cursor is None:
+        return "photo"
+    try:
+        if cursor.moveToFirst() and not cursor.isNull(0):
+            return str(cursor.getString(0))
+    finally:
+        cursor.close()
+    return "photo"
+
+
+def folder_address(tree, doc_id: str):
+    """A folder's plain address, for opening a picker at that folder."""
+    return DocumentsContract.buildDocumentUri(tree.getAuthority(), doc_id)
+
+
+def save_to_gallery(name: str, jpeg: bytes) -> None:
+    """Add a JPEG to the phone's own gallery, under Pictures/IGprepper."""
+    values = ContentValues()
+    values.put("_display_name", name)
+    values.put("mime_type", "image/jpeg")
+    values.put("relative_path", "Pictures/IGprepper")
+    uri = resolver().insert(GalleryImages.EXTERNAL_CONTENT_URI, values)
+    if uri is None:
+        raise StorageError("Android refused to add the photo to the gallery")
+    stream = resolver().openOutputStream(uri, "w")
+    try:
+        stream.write(jpeg)
+        stream.flush()
+    finally:
+        stream.close()

@@ -22,9 +22,30 @@ ColorSpace = jclass("android.graphics.ColorSpace")
 ColorSpaceNamed = jclass("android.graphics.ColorSpace$Named")
 
 
+# A decoded photo is four bytes per pixel, held several times over on its way
+# into Python. Nothing here needs more than a few thousand pixels a side to
+# make a 1080-wide result, so very large photos are decoded at a half or a
+# quarter of their size, keeping the long side at or above this.
+MIN_LONG_SIDE = 3000
+
+
+def _sample_size(width: int, height: int) -> int:
+    sample = 1
+    while max(width, height) / (sample * 2) >= MIN_LONG_SIDE:
+        sample *= 2
+    return sample
+
+
 def decode_to_srgb(data: bytes) -> Image.Image:
     """Decode image bytes into an sRGB image with no profile attached."""
+    bounds = BitmapOptions()
+    bounds.inJustDecodeBounds = True
+    BitmapFactory.decodeByteArray(data, 0, len(data), bounds)
+    if bounds.outWidth <= 0 or bounds.outHeight <= 0:
+        raise ValueError("Android could not read that image")
+
     options = BitmapOptions()
+    options.inSampleSize = _sample_size(bounds.outWidth, bounds.outHeight)
     options.inPreferredConfig = BitmapConfig.ARGB_8888
     options.inPreferredColorSpace = ColorSpace.get(ColorSpaceNamed.SRGB)
     options.inPremultiplied = False

@@ -20,9 +20,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from ..core import color, geometry as g
+from ..core.preview import PREVIEW_CANVAS_WIDTH, PROXY_MAX, render_preview  # noqa: F401
 
-PREVIEW_CANVAS_WIDTH = 600
-PROXY_MAX = 1600
 CACHE_LIMIT = 24
 
 GRID_CAPTION = "Dashed area = what your profile grid thumbnail shows"
@@ -65,33 +64,6 @@ class ProxyCache:
 
     def clear(self) -> None:
         self._items.clear()
-
-
-def render_preview(
-    proxy: Image.Image,
-    *,
-    ratio: g.AspectRatio,
-    border_pct: float,
-    mode: str,
-    frame_color: str,
-) -> Image.Image:
-    """Compose the proxy into a scale model of the finished canvas."""
-    layout = g.plan(
-        proxy.size,
-        ratio=ratio,
-        width=PREVIEW_CANVAS_WIDTH,
-        border_pct=border_pct,
-        mode=mode,
-    )
-    img = proxy
-    if layout.crop is not None:
-        img = img.crop(layout.crop)
-    if img.size != layout.scaled:
-        img = img.resize(layout.scaled, Image.Resampling.LANCZOS)
-
-    canvas = Image.new("RGB", layout.canvas, frame_color)
-    canvas.paste(img, layout.origin)
-    return canvas
 
 
 def pil_to_qpixmap(img: Image.Image) -> QPixmap:

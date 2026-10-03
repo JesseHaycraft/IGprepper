@@ -19,7 +19,9 @@ ADB = sys.argv[1]
 SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 420
 LOGS = "/sdcard/Download/IGprepper"
 FINISHED = "=== Self-test finished ==="
-BUTTONS = ("use this folder", "allow")
+# The picker's own buttons, and the test photo the self-test asks to be
+# chosen when it tries out framing.
+BUTTONS = ("use this folder", "allow", "igprepper-test-photo.jpg")
 
 NODE = re.compile(
     r'<node[^>]*?\btext="([^"]*)"[^>]*?\bbounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
