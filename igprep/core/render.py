@@ -55,17 +55,23 @@ def sharpen_percent(amount: int, scale: float) -> int:
     return int(round(amount * factor))
 
 
-def _cut_tilted(img: Image.Image, tilted: Tilted) -> Image.Image:
-    """Lift a tilted rectangle out of the photo, upright, at the photo's own
-    resolution.
+def _cut_tilted(
+    img: Image.Image,
+    tilted: Tilted,
+    size: tuple[int, int] | None = None,
+    resample: Image.Resampling = Image.Resampling.BICUBIC,
+) -> Image.Image:
+    """Lift a tilted rectangle out of the photo, upright.
 
-    This is the only resampling a tilt costs, and it happens before the
-    downscale rather than after, so the softening it causes is shrunk away
-    with everything else.
+    Left to itself this works at the photo's own resolution. That is the only
+    resampling a tilt costs, and it happens before the downscale rather than
+    after, so the softening it causes is shrunk away with everything else.
+
+    Given a `size`, it goes straight there in one step: quicker and rougher.
     """
     w, h = tilted.size
-    out = (max(1, round(w)), max(1, round(h)))
-    # Photo pixels per output pixel: 1, but for the rounding just above.
+    out = size or (max(1, round(w)), max(1, round(h)))
+    # Photo pixels per output pixel: at full size, 1 but for the rounding.
     step_x, step_y = w / out[0], h / out[1]
     theta = math.radians(tilted.degrees)
     cos, sin = math.cos(theta), math.sin(theta)
@@ -77,8 +83,7 @@ def _cut_tilted(img: Image.Image, tilted: Tilted) -> Image.Image:
     c = tilted.center[0] - a * out[0] / 2 - b * out[1] / 2
     f = tilted.center[1] - d * out[0] / 2 - e * out[1] / 2
     return img.transform(
-        out, Image.Transform.AFFINE, (a, b, c, d, e, f),
-        resample=Image.Resampling.BICUBIC,
+        out, Image.Transform.AFFINE, (a, b, c, d, e, f), resample=resample
     )
 
 
@@ -91,6 +96,25 @@ def place(img: Image.Image, layout: Layout) -> Image.Image:
     if layout.crop is not None:
         return img.crop(layout.crop)
     return img
+
+
+def place_quickly(img: Image.Image, layout: Layout) -> Image.Image:
+    """The same part of the photo as `place`, at its final size, in one step.
+
+    For drawing while a finger is moving, where keeping up matters more than
+    the last of the sharpness.
+    """
+    if layout.turns:
+        img = img.transpose(_TURN[layout.turns])
+    tilted = layout.tilted
+    if tilted is None and layout.crop is not None:
+        left, top, right, bottom = layout.crop
+        tilted = Tilted(
+            ((left + right) / 2, (top + bottom) / 2), (right - left, bottom - top), 0
+        )
+    if tilted is None:
+        return img.resize(layout.scaled, Image.Resampling.BILINEAR)
+    return _cut_tilted(img, tilted, layout.scaled, Image.Resampling.BILINEAR)
 
 
 def render(

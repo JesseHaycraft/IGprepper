@@ -14,10 +14,12 @@ from __future__ import annotations
 from PIL import Image, ImageDraw
 
 from . import geometry as g
-from .render import place
+from .render import place, place_quickly
 
 PREVIEW_CANVAS_WIDTH = 600
 PROXY_MAX = 1600
+# A smaller copy still, for redrawing while a finger is on the photo.
+QUICK_PROXY_MAX = 900
 
 # Guide lines for levelling a photo: this many squares across the short side.
 GUIDE_CELLS = 6
@@ -40,8 +42,13 @@ def render_preview(
     frame_color: str,
     width: int = PREVIEW_CANVAS_WIDTH,
     placement: g.Placement | None = None,
+    quick: bool = False,
 ) -> Image.Image:
-    """Compose the proxy into a scale model of the finished canvas."""
+    """Compose the proxy into a scale model of the finished canvas.
+
+    `quick` gives up a little sharpness for speed: the same picture, in the
+    same place, drawn fast enough to follow a finger.
+    """
     layout = g.plan(
         proxy.size,
         ratio=ratio,
@@ -50,9 +57,12 @@ def render_preview(
         mode=mode,
         placement=placement,
     )
-    img = place(proxy, layout)
-    if img.size != layout.scaled:
-        img = img.resize(layout.scaled, Image.Resampling.LANCZOS)
+    if quick:
+        img = place_quickly(proxy, layout)
+    else:
+        img = place(proxy, layout)
+        if img.size != layout.scaled:
+            img = img.resize(layout.scaled, Image.Resampling.LANCZOS)
 
     canvas = Image.new("RGB", layout.canvas, frame_color)
     canvas.paste(img, layout.origin)

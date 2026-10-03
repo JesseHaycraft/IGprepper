@@ -4,9 +4,10 @@ It works inside whichever folder is chosen in Android's folder picker, so it
 is tied to no particular storage. Today that means Google Drive or the phone
 itself; Proton Drive does not yet offer its folders to other apps.
 
-Its purpose: choose photos, frame them with a live preview, turn or tilt
-each one as needed, and save the results into the current folder and the
-phone's gallery. The diagnostic buttons from the earlier builds remain.
+Its purpose: choose photos, frame them with a live preview, position each
+one by hand -- drag, pinch, turn, tilt -- and save the results into the
+current folder and the phone's gallery. The diagnostic buttons from the
+earlier builds remain.
 
 The app never invents a folder name. Folders are created only when a name is
 typed and the button pressed, exactly as typed.
@@ -36,7 +37,7 @@ from igprep.core import geometry as g
 from igprep.core.preview import make_proxy
 from igprep.core.settings import Framing
 
-from . import androidimage, framing, imagetests, storage
+from . import androidimage, framing, gestures, imagetests, storage, touch
 from .fixtures import FIXTURES
 from .phonelog import PhoneLog
 
@@ -73,9 +74,15 @@ class IGprepperTest(toga.App):
         self.picked: list[tuple[object, str]] = []
         self.proxies: dict[int, Image.Image] = {}
         self.preview_index = 0
-        # How each photo has been turned. Ratio, fit and border are shared by
-        # the batch; this belongs to one photo.
+        self.sizes: dict[int, tuple[int, int]] = {}
+        self.quick_proxies: dict[int, Image.Image] = {}
+        # How each photo has been positioned by hand. Ratio, fit and border
+        # are shared by the batch; this belongs to one photo.
         self.placements: dict[int, g.Placement] = {}
+        self.tracker = gestures.Tracker()
+        self.dragging = False
+        self.redraw_pending = False
+        self.quick_frames, self.quick_seconds = 0, 0.0
         self.preview_plain: Image.Image | None = None
         self.guides_showing = False
         self.guide_timer = None
@@ -144,6 +151,7 @@ class IGprepperTest(toga.App):
         """Preview on top, the framing controls beneath it."""
         self.batch_label = toga.Label("")
         self.preview_view = toga.ImageView(style=Pack(flex=1, margin_top=6))
+        self.guard("listening for fingers on the photo", self.listen_for_fingers)
 
         def turner(degrees: int):
             return lambda widget: self.rotate(degrees)
@@ -535,7 +543,7 @@ class IGprepperTest(toga.App):
         for address in addresses:
             name = await self.work(storage.display_name, address)
             self.picked.append((address, name))
-        self.proxies = {}
+        self.proxies, self.sizes, self.quick_proxies = {}, {}, {}
         self.placements = {}
         self.preview_index = 0
         self.log.write(f"{len(self.picked)} photo(s) chosen. Names are not logged.")
@@ -553,28 +561,47 @@ class IGprepperTest(toga.App):
             started = time.perf_counter()
             proxy, size = await self.work(self.load_proxy, self.picked[index][0])
             self.proxies[index] = proxy
+            self.sizes[index] = size
             self.log.write(
                 f"Photo {index + 1}: opened at {size[0]} x {size[1]} in "
                 f"{time.perf_counter() - started:.2f} s"
             )
         self.clear_guides()
+        self.tracker.ended()
+        self.dragging = False
         self.update_preview()
 
     def placement(self) -> g.Placement:
         return self.placements.get(self.preview_index, g.Placement())
+
+    def place(self, placement: g.Placement) -> None:
+        """Record where the photo on screen now sits. One left exactly as it
+        was opened is not recorded at all."""
+        if placement == g.Placement():
+            self.placements.pop(self.preview_index, None)
+        else:
+            self.placements[self.preview_index] = placement
 
     def update_preview(self, widget=None) -> None:
         proxy = self.proxies.get(self.preview_index)
         if proxy is None:
             return
         try:
-            chosen, placement = self.current_framing(), self.placement()
+            chosen = self.current_framing()
+            # A change of ratio or border moves the zoom limit.
+            self.place(
+                g.within_limits(
+                    self.sizes[self.preview_index], framing.output_box(chosen),
+                    self.placement(),
+                )
+            )
+            placement = self.placement()
             self.border_label.text = f"Border {chosen.border_pct:g}%"
             self.angle_btn.text = framing.angle_label(placement.angle)
             note = ""
             if placement.positioned and chosen.mode == "fit":
-                # A tilted photo shown whole would have empty corners.
-                note = " - tilted, so it fills the frame"
+                # A photo shown whole has no position to adjust.
+                note = " - positioned by hand, so it fills the frame"
             self.batch_label.text = (
                 f"Photo {self.preview_index + 1} of {len(self.picked)}{note}"
             )
@@ -594,9 +621,15 @@ class IGprepperTest(toga.App):
     # --- turning a photo ------------------------------------------------------
 
     def rotate(self, degrees: int) -> None:
-        if self.busy or not self.picked:
+        if self.busy or self.preview_index not in self.proxies:
             return
-        self.placements[self.preview_index] = self.placement().rotated(degrees)
+        self.place(
+            g.turned_further(
+                self.sizes[self.preview_index],
+                framing.output_box(self.current_framing()),
+                self.placement(), degrees,
+            )
+        )
         self.show_guides()
         self.update_preview()
 
@@ -628,6 +661,81 @@ class IGprepperTest(toga.App):
         if showing:
             self.guard("hiding the guide lines", self.draw_preview)
 
+    # --- dragging and pinching --------------------------------------------------
+
+    def listen_for_fingers(self) -> None:
+        # Kept on the app so it is not swept away while Android still holds it.
+        self.finger_listener = touch.Listener(
+            self.on_fingers, lambda: self.log.exception("following a finger")
+        )
+        self.preview_view._impl.native.setOnTouchListener(self.finger_listener)
+        self.live = touch.Canvas()
+
+    def on_fingers(self, kind: str, points) -> None:
+        if self.busy or self.preview_index not in self.proxies:
+            return
+        if kind == touch.CHANGED:
+            self.tracker.changed(points)
+        elif kind == touch.MOVED:
+            step = self.tracker.moved(points)
+            if step is not None:
+                self.drag(step)
+        else:
+            self.tracker.ended()
+            if self.dragging:
+                # The fingers have gone: draw it properly.
+                self.dragging = False
+                self.update_preview()
+
+    def drag(self, step: gestures.Step) -> None:
+        """Move the photo with the fingers."""
+        centre_x, centre_y, shown_width = touch.shown_at(
+            self.preview_view._impl.native
+        )
+        # Screen pixels to pixels of the finished picture, from its centre.
+        scale = framing.OUTPUT_WIDTH / shown_width
+
+        def on_output(point):
+            return (point[0] - centre_x) * scale, (point[1] - centre_y) * scale
+
+        self.place(
+            g.moved(
+                self.sizes[self.preview_index],
+                framing.output_box(self.current_framing()),
+                self.placement(),
+                before=on_output(step.before),
+                after=on_output(step.after),
+                spread=step.spread,
+            )
+        )
+        self.dragging = True
+        # Fingers report faster than a picture can be drawn. Draw once for
+        # however many reports arrive in the meantime.
+        if not self.redraw_pending:
+            self.redraw_pending = True
+            self.loop.call_soon(self.redraw_quickly)
+
+    def redraw_quickly(self) -> None:
+        self.redraw_pending = False
+        index = self.preview_index
+        if not self.dragging or index not in self.proxies:
+            return
+        try:
+            started = time.perf_counter()
+            if index not in self.quick_proxies:
+                self.quick_proxies[index] = framing.quick_proxy(self.proxies[index])
+            chosen = self.current_framing()
+            image = framing.quick_preview(
+                self.quick_proxies[index], chosen, self.placement()
+            )
+            if self.guides_showing:
+                image = framing.guided(image, chosen)
+            self.live.show(self.preview_view._impl.native, image)
+            self.quick_frames += 1
+            self.quick_seconds += time.perf_counter() - started
+        except Exception:
+            self.log.exception("redrawing under a finger")
+
     async def next_photo(self, widget=None) -> None:
         await self.exclusively("showing the next photo", self._next_photo())
 
@@ -637,7 +745,10 @@ class IGprepperTest(toga.App):
 
     def forget_photos(self) -> None:
         self.clear_guides()
+        self.tracker.ended()
+        self.dragging = False
         self.picked, self.proxies, self.placements = [], {}, {}
+        self.sizes, self.quick_proxies = {}, {}
         self.preview_plain = None
 
     async def leave_framing(self, widget=None) -> None:
@@ -703,8 +814,10 @@ class IGprepperTest(toga.App):
                 note = ""
                 if placement.angle:
                     note += f" Turned {placement.angle} degrees."
+                if placement.zoom != 1.0 or placement.offset_x or placement.offset_y:
+                    note += " Moved or zoomed by hand."
                 if placement.positioned and chosen.mode == "fit":
-                    note += " Tilted, so it fills the frame."
+                    note += " Positioned by hand, so it fills the frame."
                 if result.upscaled:
                     note += " Enlarged: the photo is smaller than the frame."
                 log.write(
@@ -843,6 +956,7 @@ class IGprepperTest(toga.App):
         )
         await self.hold_for_screenshot("framing-one-photo")
         await self.self_test_rotation()
+        await self.self_test_fingers()
 
         self.ratio_select.value = next(
             label for label, key in self.ratio_choices.items() if key == "1:1"
@@ -928,6 +1042,131 @@ class IGprepperTest(toga.App):
             f"A press of the angle put the photo back: it reads {self.angle_btn.text}.",
         )
         await self.hold_for_screenshot("framing-recentred")
+
+
+    async def self_test_fingers(self) -> None:
+        """Drag and pinch the photo with touches made the way Android makes
+        them, and see that it follows."""
+        log = self.log
+        log.section("Self-test: dragging and pinching")
+        from android.view import MotionEvent
+
+        def verdict(ok: bool, text: str) -> None:
+            log.write(f"{'PASS' if ok else 'FAIL'}  {text}")
+
+        # A square frame on a tall photo: room to slide up and down.
+        self.ratio_select.value = next(
+            label for label, key in self.ratio_choices.items() if key == "1:1"
+        )
+        self.fit_select.value = next(
+            label for label, mode in FIT_CHOICES.items() if mode == "crop"
+        )
+        await asyncio.sleep(1)
+
+        view = self.preview_view._impl.native
+        size = self.sizes[self.preview_index]
+        box = framing.output_box(self.current_framing())
+        centre_x, centre_y, shown_width = touch.shown_at(view)
+        log.write(
+            f"The preview is drawn {shown_width:.0f} pixels wide, centred at "
+            f"{centre_x:.0f}, {centre_y:.0f} in a view {view.getWidth()} x "
+            f"{view.getHeight()}."
+        )
+
+        async def touches(*moments) -> None:
+            began = touch.now()
+            for action, points in moments:
+                touch.send(view, action, points, began)
+                await asyncio.sleep(0.05)
+
+        # One finger, pulled straight down.
+        pull = 60
+        self.quick_frames, self.quick_seconds = 0, 0.0
+        await touches(
+            (MotionEvent.ACTION_DOWN, [(centre_x, centre_y)]),
+            *[
+                (MotionEvent.ACTION_MOVE, [(centre_x, centre_y + pull * n / 6)])
+                for n in range(1, 7)
+            ],
+            (MotionEvent.ACTION_UP, [(centre_x, centre_y + pull)]),
+        )
+        expected = g.moved(
+            size, box, g.Placement(), before=(0, 0),
+            after=(0, pull * framing.OUTPUT_WIDTH / shown_width),
+        )
+        got = self.placement()
+        verdict(
+            got.offset_y < 0 and abs(got.offset_y - expected.offset_y) < 0.01
+            and got.offset_x == 0 and not self.dragging,
+            f"One finger pulled down {pull} pixels slid the photo down by "
+            f"{-got.offset_y:.3f} of the room it has; exact would be "
+            f"{-expected.offset_y:.3f}.",
+        )
+        frames = self.quick_frames
+        each = self.quick_seconds / frames * 1000 if frames else 0.0
+        verdict(
+            frames > 0,
+            f"The photo was redrawn {frames} time(s) while the finger moved, "
+            f"in {each:.0f} ms each.",
+        )
+        await self.hold_for_screenshot("framing-dragged")
+
+        # Two fingers, spread far apart: zoom, up to the limit and no further.
+        limit = g.max_zoom(size, box, self.placement())
+        second = touch.second_finger
+        await touches(
+            (MotionEvent.ACTION_DOWN, [(centre_x - 40, centre_y)]),
+            (second(MotionEvent.ACTION_POINTER_DOWN),
+             [(centre_x - 40, centre_y), (centre_x + 40, centre_y)]),
+            *[
+                (MotionEvent.ACTION_MOVE,
+                 [(centre_x - 40 - 30 * n, centre_y), (centre_x + 40 + 30 * n, centre_y)])
+                for n in range(1, 5)
+            ],
+            (second(MotionEvent.ACTION_POINTER_UP),
+             [(centre_x - 160, centre_y), (centre_x + 160, centre_y)]),
+            (MotionEvent.ACTION_UP, [(centre_x - 160, centre_y)]),
+        )
+        zoomed = self.placement().zoom
+        verdict(
+            limit > 1 and abs(zoomed - limit) < 1e-6,
+            f"Two fingers spread to four times apart zoomed to {zoomed:.3f} and "
+            f"stopped: the limit for this photo is {limit:.3f}.",
+        )
+
+        # And pinched back together: out again, but never smaller than the frame.
+        await touches(
+            (MotionEvent.ACTION_DOWN, [(centre_x - 160, centre_y)]),
+            (second(MotionEvent.ACTION_POINTER_DOWN),
+             [(centre_x - 160, centre_y), (centre_x + 160, centre_y)]),
+            *[
+                (MotionEvent.ACTION_MOVE,
+                 [(centre_x - 160 + 30 * n, centre_y), (centre_x + 160 - 30 * n, centre_y)])
+                for n in range(1, 5)
+            ],
+            (second(MotionEvent.ACTION_POINTER_UP),
+             [(centre_x - 40, centre_y), (centre_x + 40, centre_y)]),
+            (MotionEvent.ACTION_UP, [(centre_x - 40, centre_y)]),
+        )
+        verdict(
+            self.placement().zoom == 1.0,
+            f"Pinched back together, the zoom returned to "
+            f"{self.placement().zoom:.3f}: the photo still fills the frame.",
+        )
+
+        # A touch that goes nowhere.
+        before = self.placement()
+        await touches(
+            (MotionEvent.ACTION_DOWN, [(centre_x + 20, centre_y - 20)]),
+            (MotionEvent.ACTION_UP, [(centre_x + 20, centre_y - 20)]),
+        )
+        verdict(self.placement() == before, "A tap moved nothing.")
+
+        self.recentre()
+        verdict(
+            not self.placements,
+            "A press of the angle put the photo back in the middle.",
+        )
 
 
 def main() -> IGprepperTest:

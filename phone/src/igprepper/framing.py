@@ -18,7 +18,12 @@ from PIL import Image
 
 from igprep.core import geometry as g
 from igprep.core import naming, render
-from igprep.core.preview import make_proxy, render_preview, with_guides
+from igprep.core.preview import (
+    QUICK_PROXY_MAX,
+    make_proxy,
+    render_preview,
+    with_guides,
+)
 from igprep.core.settings import Framing
 
 OUTPUT_WIDTH = 1080
@@ -68,6 +73,12 @@ class Framed:
     upscaled: bool
 
 
+def output_box(framing: Framing, width: int = OUTPUT_WIDTH) -> tuple[int, int]:
+    """The photo's share of the finished picture, in its pixels."""
+    canvas = g.canvas_size(framing.aspect(), width)
+    return g.photo_box(canvas, g.border_px(canvas[0], framing.border_pct))
+
+
 def frame(
     image: Image.Image,
     framing: Framing,
@@ -75,6 +86,10 @@ def frame(
     width: int = OUTPUT_WIDTH,
 ) -> Framed:
     """Run a prepared image through the pipeline and encode the result."""
+    if placement is not None:
+        placement = g.within_limits(
+            image.size, output_box(framing, width), placement
+        )
     layout = g.plan(
         image.size,
         ratio=framing.aspect(),
@@ -108,6 +123,26 @@ def preview(
         mode=framing.mode,
         frame_color=framing.frame_color,
         placement=placement,
+    )
+
+
+def quick_proxy(proxy: Image.Image) -> Image.Image:
+    """A smaller copy of a proxy, for redrawing while a finger is moving."""
+    return make_proxy(proxy, QUICK_PROXY_MAX)
+
+
+def quick_preview(
+    small: Image.Image, framing: Framing, placement: g.Placement | None = None
+) -> Image.Image:
+    """The preview, drawn fast and a little soft. Same picture, same place."""
+    return render_preview(
+        small,
+        ratio=framing.aspect(),
+        border_pct=framing.border_pct,
+        mode=framing.mode,
+        frame_color=framing.frame_color,
+        placement=placement,
+        quick=True,
     )
 
 

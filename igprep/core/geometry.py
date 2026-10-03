@@ -255,16 +255,156 @@ def placed_crop(
         top = int(math.floor((sh - ch) * (1 + slide_y) / 2))
         return (left, top, left + cw, top + ch), None, box[0] / cw
 
-    w = widest_tilted_crop(src, ratio, placement.tilt) / zoom
+    w, reach = _reach(src, ratio, placement.tilt, zoom)
+    center = (sw / 2 + slide_x * reach[0], sh / 2 + slide_y * reach[1])
+    return None, Tilted(center, (w, w / ratio), placement.tilt), box[0] / w
+
+
+def _reach(
+    src: tuple[int, int], ratio: float, tilt: float, zoom: float
+) -> tuple[float, tuple[float, float]]:
+    """The crop's width at this zoom, and how far its centre may sit from the
+    photo's centre, across and down, before a corner leaves the photo."""
+    w = widest_tilted_crop(src, ratio, tilt) / zoom
     h = w / ratio
-    cos = abs(math.cos(math.radians(placement.tilt)))
-    sin = abs(math.sin(math.radians(placement.tilt)))
-    around = (w * cos + h * sin, w * sin + h * cos)
-    center = (
-        sw / 2 + slide_x * (sw - around[0]) / 2,
-        sh / 2 + slide_y * (sh - around[1]) / 2,
+    cos = abs(math.cos(math.radians(tilt)))
+    sin = abs(math.sin(math.radians(tilt)))
+    return w, (
+        max(0.0, (src[0] - (w * cos + h * sin)) / 2),
+        max(0.0, (src[1] - (w * sin + h * cos)) / 2),
     )
-    return None, Tilted(center, (w, h), placement.tilt), box[0] / w
+
+
+def _slide(distance: float, reach: float) -> float:
+    """A distance from the centre, as a share of the room there is."""
+    return _clamp(distance / reach, -1.0, 1.0) if reach > 1e-9 else 0.0
+
+
+def _crop_centre(
+    turned: tuple[int, int], box: tuple[int, int], placement: Placement
+) -> tuple[float, float]:
+    _, reach = _reach(
+        turned, box[0] / box[1], placement.tilt, max(1.0, placement.zoom)
+    )
+    return (
+        turned[0] / 2 + _clamp(placement.offset_x, -1.0, 1.0) * reach[0],
+        turned[1] / 2 + _clamp(placement.offset_y, -1.0, 1.0) * reach[1],
+    )
+
+
+def _centred_on(
+    turned: tuple[int, int],
+    box: tuple[int, int],
+    placement: Placement,
+    centre: tuple[float, float],
+) -> Placement:
+    """The placement, slid so its crop is centred on `centre` or as near as
+    the photo's edges allow."""
+    _, reach = _reach(
+        turned, box[0] / box[1], placement.tilt, max(1.0, placement.zoom)
+    )
+    return replace(
+        placement,
+        offset_x=_slide(centre[0] - turned[0] / 2, reach[0]),
+        offset_y=_slide(centre[1] - turned[1] / 2, reach[1]),
+    )
+
+
+def turn_point(
+    src: tuple[int, int], turns: int, point: tuple[float, float]
+) -> tuple[float, float]:
+    """Where a point of the photo ends up after quarter turns clockwise."""
+    x, y = point
+    turns %= 4
+    if turns == 1:
+        return src[1] - y, x
+    if turns == 2:
+        return src[0] - x, src[1] - y
+    if turns == 3:
+        return y, src[0] - x
+    return x, y
+
+
+def unturn_point(
+    src: tuple[int, int], turns: int, point: tuple[float, float]
+) -> tuple[float, float]:
+    """The reverse of `turn_point`: `src` is still the photo before turning."""
+    return turn_point(turned_size(src, turns), -turns, point)
+
+
+def within_limits(
+    src: tuple[int, int], box: tuple[int, int], placement: Placement
+) -> Placement:
+    """The placement with its zoom brought inside what the photo allows.
+
+    The limit moves when the ratio, the border or the tilt changes, so a zoom
+    that was fine a moment ago may not be now.
+    """
+    zoom = _clamp(placement.zoom, 1.0, max_zoom(src, box, placement))
+    return placement if zoom == placement.zoom else replace(placement, zoom=zoom)
+
+
+def moved(
+    src: tuple[int, int],
+    box: tuple[int, int],
+    placement: Placement,
+    *,
+    before: tuple[float, float],
+    after: tuple[float, float],
+    spread: float = 1.0,
+) -> Placement:
+    """The placement after a drag or a pinch.
+
+    A finger, or the midpoint between two, went from `before` to `after`.
+    Both are measured from the centre of the frame, in pixels of `box`.
+    `spread` is how much further apart two fingers ended than they began.
+    Whatever part of the photo was under `before` is put under `after`, as
+    nearly as the photo's edges and the zoom limit allow.
+    """
+    turned = turned_size(src, placement.turns)
+    ratio = box[0] / box[1]
+    theta = math.radians(placement.tilt)
+    cos, sin = math.cos(theta), math.sin(theta)
+
+    def on_photo(v: tuple[float, float], scale: float) -> tuple[float, float]:
+        # The photo is shown turned clockwise, so turn the other way to get
+        # from a distance on the output to a distance on the photo.
+        return (v[0] * cos + v[1] * sin) / scale, (-v[0] * sin + v[1] * cos) / scale
+
+    zoom = max(1.0, placement.zoom)
+    w, _ = _reach(turned, ratio, placement.tilt, zoom)
+    centre = _crop_centre(turned, box, placement)
+    step = on_photo(before, box[0] / w)
+    held = (centre[0] + step[0], centre[1] + step[1])
+
+    zoom = _clamp(zoom * spread, 1.0, max_zoom(src, box, placement))
+    w, _ = _reach(turned, ratio, placement.tilt, zoom)
+    step = on_photo(after, box[0] / w)
+    return _centred_on(
+        turned, box, replace(placement, zoom=zoom),
+        (held[0] - step[0], held[1] - step[1]),
+    )
+
+
+def turned_further(
+    src: tuple[int, int], box: tuple[int, int], placement: Placement, degrees: int
+) -> Placement:
+    """Rotated by `degrees`, keeping the same part of the photo in the middle.
+
+    Sliding is measured along the photo's sides, and which side is which
+    changes with every quarter turn. Without this, a photo that had been
+    moved off-centre would jump as it passed 45 degrees.
+    """
+    before = turned_size(src, placement.turns)
+    spot = unturn_point(src, placement.turns, _crop_centre(before, box, placement))
+
+    turned = within_limits(src, box, placement.rotated(degrees))
+    if not (placement.offset_x or placement.offset_y):
+        return turned  # centred stays exactly centred
+    return _centred_on(
+        turned_size(src, turned.turns), box, turned,
+        turn_point(src, turned.turns, spot),
+    )
 
 
 def max_zoom(

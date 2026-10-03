@@ -351,3 +351,189 @@ def test_guide_lines_show_on_any_photo_and_leave_the_frame_alone(shade):
     frame_only = changed.copy()
     frame_only.paste(0, (border, border, 600 - border, 800 - border))
     assert frame_only.getextrema() == (0, 0)
+
+
+# --- dragging and pinching ------------------------------------------------------
+
+BOX = _plan((6000, 4000), ratio="1:1").box  # the photo area of a square post
+
+
+def _moved(placement, before, after, spread=1.0, src=(6000, 4000)):
+    return g.moved(src, BOX, placement, before=before, after=after, spread=spread)
+
+
+def _dot_photo(at=(2600, 1700), size=(6000, 4000)) -> Image.Image:
+    img = Image.new("RGB", size, BLUE)
+    ImageDraw.Draw(img).ellipse(
+        [at[0] - 60, at[1] - 60, at[0] + 60, at[1] + 60], fill=(255, 0, 0)
+    )
+    return img
+
+
+def _find_dot(out: Image.Image) -> tuple[float, float]:
+    """Centre of the red dot, measured from the centre of the frame."""
+    red = [
+        (x, y)
+        for y in range(0, out.height, 2)
+        for x in range(0, out.width, 2)
+        if out.getpixel((x, y))[0] > 200 and out.getpixel((x, y))[2] < 80
+    ]
+    assert red, "the dot is not in the frame"
+    return (
+        sum(x for x, _ in red) / len(red) - (out.width - 1) / 2,
+        sum(y for _, y in red) / len(red) - (out.height - 1) / 2,
+    )
+
+
+@pytest.mark.parametrize("turns", [0, 1, 2, 3])
+def test_turn_point_agrees_with_actually_turning_the_image(turns):
+    img = Image.new("L", (40, 30), 0)
+    img.putpixel((7, 4), 255)
+    turned = img.transpose(render._TURN[turns]) if turns else img
+    found = next(
+        (x, y) for y in range(turned.height) for x in range(turned.width)
+        if turned.getpixel((x, y))
+    )
+    # Pixels have size: the one at (7, 4) is centred on (7.5, 4.5).
+    assert g.turn_point((40, 30), turns, (7.5, 4.5)) == (found[0] + 0.5, found[1] + 0.5)
+    assert g.unturn_point((40, 30), turns, (found[0] + 0.5, found[1] + 0.5)) == (7.5, 4.5)
+
+
+def test_dragging_moves_the_photo_with_the_finger():
+    # 4000 photo pixels across 994 output pixels: the finger moves the photo
+    # about four photo pixels for each one it travels.
+    placed = _moved(g.Placement(), (0, 0), (100, 0))
+    crop = _plan((6000, 4000), placed, ratio="1:1").crop
+    assert crop[2] - crop[0] == 4000
+    assert crop[0] == pytest.approx(1000 - 100 * 4000 / BOX[0], abs=1)
+    assert placed.offset_y == 0  # no room up or down, and none taken
+
+
+def test_dragging_stops_at_the_edge_of_the_photo():
+    placed = _moved(g.Placement(), (0, 0), (5000, 0))
+    assert placed.offset_x == -1.0
+    assert _plan((6000, 4000), placed, ratio="1:1").crop == (0, 0, 4000, 4000)
+    back = _moved(placed, (0, 0), (-100, 0))
+    assert back.offset_x > -1.0  # and comes away from it at once
+
+
+def test_a_touch_that_does_not_move_changes_nothing():
+    for start in (g.Placement(), g.Placement(angle=12, zoom=1.5, offset_x=0.25)):
+        after = _moved(start, (40, -30), (40, -30))
+        assert after.zoom == start.zoom and after.angle == start.angle
+        assert after.offset_x == pytest.approx(start.offset_x, abs=1e-9)
+        assert after.offset_y == pytest.approx(start.offset_y, abs=1e-9)
+
+
+def test_pinching_at_the_centre_zooms_without_sliding():
+    placed = _moved(g.Placement(), (0, 0), (0, 0), spread=2.0)
+    assert placed.zoom == pytest.approx(2.0)
+    assert (placed.offset_x, placed.offset_y) == (0.0, 0.0)
+
+
+def test_pinching_stops_at_the_zoom_limit_and_at_filling_the_frame():
+    limit = g.max_zoom((6000, 4000), BOX, g.Placement())
+    assert _moved(g.Placement(), (0, 0), (0, 0), spread=50).zoom == pytest.approx(limit)
+    assert _moved(g.Placement(zoom=2), (0, 0), (0, 0), spread=0.01).zoom == 1.0
+
+
+@pytest.mark.parametrize("angle", [0, 10, -25, 90, 100, 180, -80])
+def test_what_was_under_the_fingers_stays_under_them(angle):
+    img = _dot_photo()
+    start = g.Placement(angle=angle, zoom=1.6)
+    out, _ = _framed(img, start, ratio="1:1")
+    was = _find_dot(out)
+
+    # Take hold of the dot, pull it somewhere else, and spread the fingers.
+    target = (was[0] * 0.5 + 60, was[1] * 0.5 - 45)
+    placed = _moved(start, was, target, spread=1.25)
+    out, _ = _framed(img, placed, ratio="1:1")
+    now = _find_dot(out)
+
+    assert placed.zoom == pytest.approx(2.0)
+    assert abs(placed.offset_x) < 1 and abs(placed.offset_y) < 1  # not at an edge
+    assert now[0] == pytest.approx(target[0], abs=2.5)
+    assert now[1] == pytest.approx(target[1], abs=2.5)
+
+
+def test_many_small_moves_add_up_to_one_large_one():
+    in_one = _moved(g.Placement(angle=8, zoom=2), (10, 20), (110, -60), spread=1.3)
+    step = g.Placement(angle=8, zoom=2)
+    for n in range(20):
+        a = (10 + 5 * n, 20 - 4 * n)
+        b = (10 + 5 * (n + 1), 20 - 4 * (n + 1))
+        step = _moved(step, a, b, spread=1.3 ** (1 / 20))
+    assert step.zoom == pytest.approx(in_one.zoom)
+    assert step.offset_x == pytest.approx(in_one.offset_x, abs=1e-6)
+    assert step.offset_y == pytest.approx(in_one.offset_y, abs=1e-6)
+
+
+# --- rotating a photo that has been moved ---------------------------------------
+
+@pytest.mark.parametrize("degrees", [1, -1, 90, -90])
+def test_rotating_a_centred_photo_leaves_it_centred(degrees):
+    for start in (g.Placement(), g.Placement(angle=44), g.Placement(angle=-135)):
+        after = g.turned_further((6000, 4000), BOX, start, degrees)
+        assert after == start.rotated(degrees)
+
+
+@pytest.mark.parametrize("start_angle,degrees", [
+    (0, 1), (44, 1), (45, 1), (-45, -1), (10, 90), (10, -90), (200, 1), (-3, 3),
+])
+def test_rotating_keeps_the_same_spot_in_the_middle(start_angle, degrees):
+    img = _dot_photo()
+    # Zoomed in enough to have room to move, not so far the dot is cut off.
+    centred = g.Placement(angle=start_angle, zoom=2)
+    out, _ = _framed(img, centred, ratio="1:1")
+    # Put the dot in the middle of the frame, then rotate.
+    start = _moved(centred, _find_dot(out), (0, 0))
+    after = g.turned_further((6000, 4000), BOX, start, degrees)
+    out, _ = _framed(img, after, ratio="1:1")
+
+    assert after.angle == start.rotated(degrees).angle
+    assert _find_dot(out) == pytest.approx((0, 0), abs=2.5)
+
+
+def test_rotating_brings_the_zoom_back_inside_its_limit():
+    limit = g.max_zoom((6000, 4000), BOX, g.Placement())
+    after = g.turned_further((6000, 4000), BOX, g.Placement(zoom=limit), 30)
+    assert after.zoom == pytest.approx(
+        g.max_zoom((6000, 4000), BOX, g.Placement(angle=30))
+    )
+    assert after.zoom < limit
+
+
+def test_within_limits_only_touches_a_zoom_that_is_out_of_range():
+    fine = g.Placement(angle=5, zoom=2, offset_x=0.3)
+    assert g.within_limits((6000, 4000), BOX, fine) is fine
+    too_far = g.Placement(zoom=40)
+    assert g.within_limits((6000, 4000), BOX, too_far).zoom == pytest.approx(
+        g.max_zoom((6000, 4000), BOX, too_far)
+    )
+    # A photo too small to fill the frame cannot be zoomed at all.
+    assert g.within_limits((300, 200), BOX, g.Placement(zoom=3)).zoom == 1.0
+
+
+# --- the quick preview ------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "placement,mode",
+    [
+        (None, "crop"),
+        (None, "fit"),
+        (g.Placement(angle=90), "fit"),
+        (g.Placement(angle=7), "crop"),
+        (g.Placement(angle=-100, zoom=1.8, offset_x=-0.6, offset_y=0.2), "crop"),
+        (g.Placement(zoom=2.5, offset_x=1, offset_y=-1), "crop"),
+    ],
+)
+def test_quick_preview_shows_the_same_picture_in_the_same_place(placement, mode):
+    proxy = make_proxy(_scene(3000, 2000))
+    settings = dict(
+        ratio=g.ratio_for("3:4"), border_pct=4.0, mode=mode,
+        frame_color="#FFFFFF", placement=placement,
+    )
+    exact = render_preview(proxy, **settings)
+    quick = render_preview(make_proxy(proxy, 900), quick=True, **settings)
+    assert quick.size == exact.size
+    assert _difference(quick, exact) < 2.0
