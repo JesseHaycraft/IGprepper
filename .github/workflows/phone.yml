@@ -225,8 +225,10 @@ jobs:
             exit 1
           fi
 
-          python phone/tools/ci_drive.py "$adb" 480
-          driven=$?
+          # Capture the result rather than stopping here: the app's own log,
+          # printed next, is what explains a failure.
+          driven=0
+          python phone/tools/ci_drive.py "$adb" 300 || driven=$?
 
           echo "----- what the app wrote to its logs -----"
           "$adb" shell "cat $logs" | tee app-log.txt
