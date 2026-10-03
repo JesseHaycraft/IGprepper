@@ -1,0 +1,27 @@
+# The Android test app. Kept apart from the desktop app's pyproject.toml so
+# that the desktop dependencies (PySide6) are never pulled into a phone build.
+
+[tool.briefcase]
+project_name = "IGprepper"
+# Deliberately carries no personal name: the package id is readable by
+# anyone who downloads a build.
+bundle = "org.igprepper"
+version = "0.0.1"
+url = "https://github.com/JesseHaycraft/IGprepper"
+license = "LicenseRef-Proprietary"
+
+[tool.briefcase.app.igprepper]
+formal_name = "IGprepper"
+description = "Test app: Proton Drive folders and the IGprepper image pipeline on a phone"
+sources = ["src/igprepper"]
+requires = []
+
+[tool.briefcase.app.igprepper.android]
+requires = [
+    "toga-android~=0.5.0",
+    # The newest build in the Android package repository; PyPI's own wheels
+    # do not cover Android, and pip must not try to compile it from source.
+    "pillow==11.0.0",
+]
+# MediaStore's Downloads collection, used for the log file, needs Android 10.
+min_os_version = "29"
