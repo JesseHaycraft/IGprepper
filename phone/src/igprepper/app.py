@@ -60,7 +60,7 @@ class IGprepperTest(toga.App):
         self.choose_btn = toga.Button(
             "Choose a folder", on_press=self.choose_folder, style=Pack(margin_top=6)
         )
-        self.location = toga.Label("No folder chosen yet", style=Pack(margin_top=6))
+        self.where_label = toga.Label("No folder chosen yet", style=Pack(margin_top=6))
 
         self.folder_select = toga.Selection(items=[], style=Pack(flex=1))
         self.open_btn = toga.Button("Open", on_press=self.open_selected)
@@ -93,7 +93,7 @@ class IGprepperTest(toga.App):
 
         box = toga.Box(
             children=[
-                heading, self.choose_btn, self.location, navigate, create,
+                heading, self.choose_btn, self.where_label, navigate, create,
                 self.files_btn, self.images_btn, self.output,
             ],
             style=Pack(direction=COLUMN, margin=12),
@@ -222,7 +222,7 @@ class IGprepperTest(toga.App):
         )
         files = sum(1 for e in entries if not e.is_dir)
         self.folder_select.items = [e.name for e in self.subfolders]
-        self.location.text = " / ".join(name for _, name in self.trail)
+        self.where_label.text = " / ".join(name for _, name in self.trail)
         self.log.write(
             f"This folder holds {len(self.subfolders)} folder(s) and {files} "
             "file(s). Names are not logged."

@@ -162,6 +162,11 @@ jobs:
             local deadline=$((SECONDS + $2))
             until [ "$(count_logs)" -ge "$1" ] 2>/dev/null; do
               [ $SECONDS -lt $deadline ] || return 1
+              # A crash will never produce a log; stop waiting for one.
+              if "$adb" logcat -d -s AndroidRuntime:E 2>/dev/null | grep -q "$package"; then
+                echo "The app crashed."
+                return 1
+              fi
               sleep 10
             done
             sleep 15   # let the app finish its opening report
