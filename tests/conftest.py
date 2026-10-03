@@ -35,15 +35,21 @@ def gradient():
 
 
 @pytest.fixture
-def warm_profile_bytes():
-    """A real, valid RGB profile that is not sRGB.
+def p3_profile_bytes():
+    """A Display P3 profile: a real colour space that is not sRGB.
 
-    Built by shifting sRGB's white point, which gives a profile whose
-    transform to sRGB measurably moves pixel values.
+    An earlier version of this fixture shifted sRGB's white point instead.
+    Relative colorimetric conversion adapts a white point away entirely, so
+    that profile converted to exactly the same numbers and proved nothing.
     """
-    return ImageCms.ImageCmsProfile(
-        ImageCms.createProfile("sRGB", 5000)
-    ).tobytes()
+    import sys
+    from pathlib import Path
+
+    tools = Path(__file__).resolve().parents[1] / "phone" / "tools"
+    sys.path.insert(0, str(tools))
+    import make_fixtures
+
+    return make_fixtures.display_p3_profile()
 
 
 def write_jpeg(img, path, **kw):

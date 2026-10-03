@@ -113,13 +113,24 @@ def test_exif_orientation_is_applied_before_geometry(tmp_path, solid):
     assert loaded.size == (2000, 3000)
 
 
-def test_icc_profile_is_converted_to_srgb(tmp_path, warm_profile_bytes):
-    src = Image.new("RGB", (600, 600), (180, 120, 90))
-    path = tmp_path / "warm.jpg"
-    src.save(path, "JPEG", quality=100, icc_profile=warm_profile_bytes)
+def test_icc_profile_is_converted_to_srgb(tmp_path, p3_profile_bytes):
+    """A Display P3 red is a more saturated red once expressed in sRGB."""
+    src = Image.new("RGB", (600, 600), (200, 80, 60))
+    path = tmp_path / "p3.jpg"
+    src.save(path, "JPEG", quality=100, subsampling=0, icc_profile=p3_profile_bytes)
 
-    converted = color.to_srgb(render.load(path))
-    assert converted.getpixel((300, 300)) != (180, 120, 90)
+    r, g_, b = color.to_srgb(render.load(path)).getpixel((300, 300))
+    # Far outside anything JPEG rounding could produce.
+    assert r >= 212 and g_ <= 74 and b <= 55
+
+
+def test_grey_is_unchanged_by_conversion(tmp_path, p3_profile_bytes):
+    """Neutrals sit on the same axis in every RGB space."""
+    src = Image.new("RGB", (600, 600), (128, 128, 128))
+    path = tmp_path / "grey.jpg"
+    src.save(path, "JPEG", quality=100, subsampling=0, icc_profile=p3_profile_bytes)
+
+    assert color.to_srgb(render.load(path)).getpixel((300, 300)) == (128, 128, 128)
 
 
 def test_untagged_images_are_left_alone(tmp_path):
@@ -142,11 +153,11 @@ def test_a_corrupt_profile_does_not_fail_the_job(tmp_path):
     assert converted.size == (600, 600)
 
 
-def test_profile_name_is_readable(warm_profile_bytes):
+def test_profile_name_is_readable(p3_profile_bytes):
     img = Image.new("RGB", (10, 10))
     assert color.embedded_profile_name(img) is None
-    img.info["icc_profile"] = warm_profile_bytes
-    assert isinstance(color.embedded_profile_name(img), str)
+    img.info["icc_profile"] = p3_profile_bytes
+    assert color.embedded_profile_name(img) == "Display P3 (test)"
 
 
 def test_saved_jpeg_embeds_srgb_and_uses_444(tmp_path, gradient):

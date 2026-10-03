@@ -10,12 +10,17 @@ from __future__ import annotations
 import io
 import logging
 
-from PIL import Image, ImageCms
+from PIL import Image, ImageCms, features
+
+from .srgb_profile import SRGB_BYTES
 
 log = logging.getLogger(__name__)
 
-_SRGB = ImageCms.createProfile("sRGB")
-SRGB_BYTES: bytes = ImageCms.ImageCmsProfile(_SRGB).tobytes()
+# The colour engine is absent from the image library's Android builds. This
+# module still has to import there, so nothing below may touch the engine at
+# import time; a caller on such a platform converts to sRGB by other means
+# before handing the image over.
+HAVE_ENGINE: bool = features.check("littlecms2")
 
 # Relative colorimetric with black point compensation is what Lightroom and
 # Photoshop use for this kind of export, so results match what the user expects.
@@ -61,8 +66,9 @@ def to_srgb(img: Image.Image) -> Image.Image:
     if raw and base.mode in _TRANSFORMABLE:
         try:
             src = ImageCms.ImageCmsProfile(io.BytesIO(raw))
+            dst = ImageCms.ImageCmsProfile(io.BytesIO(SRGB_BYTES))
             converted = ImageCms.profileToProfile(
-                base, src, _SRGB,
+                base, src, dst,
                 renderingIntent=INTENT, outputMode="RGB", flags=FLAGS,
             )
             if converted is not None:

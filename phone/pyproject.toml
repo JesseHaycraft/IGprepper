@@ -13,7 +13,10 @@ license = "LicenseRef-Proprietary"
 formal_name = "IGprepper"
 # Kept generic, like the bundle: this text is embedded in every build.
 description = "IGprepper phone test app"
-sources = ["src/igprepper"]
+# The image pipeline is the desktop app's, used unchanged. Bundling the
+# whole package also carries its desktop screens along, which are never
+# imported here and so never need their desktop-only dependencies.
+sources = ["src/igprepper", "../igprep"]
 requires = []
 
 [tool.briefcase.app.igprepper.android]

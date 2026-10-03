@@ -137,18 +137,22 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Check the app starts and writes its log
+      - name: Run the app in an emulator
         # Nobody can see the phone's own logs, so a build that crashes on
-        # launch would cost a whole round trip and explain nothing. Running it
-        # in an emulator first catches that before anything is published.
+        # launch would cost a whole round trip and explain nothing. This runs
+        # the app in an emulator and has it test itself before anything is
+        # published: the image checks, and every folder and file operation
+        # against the emulator's own storage.
         env:
           APK: ${{ steps.sign.outputs.apk }}
           SIGNED: ${{ steps.sign.outputs.signed }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           export JAVA_HOME="$JAVA_HOME_17_X64"
           adb="$ANDROID_HOME/platform-tools/adb"
           package=org.igprepper.igprepper
+          activity="$package/org.beeware.android.MainActivity"
           logs='/sdcard/Download/IGprepper/*.txt'
 
           count_logs() {
@@ -160,7 +164,11 @@ jobs:
               [ $SECONDS -lt $deadline ] || return 1
               sleep 10
             done
-            sleep 20   # let the app finish writing its report
+            sleep 15   # let the app finish its opening report
+          }
+          show_crash() {
+            "$adb" logcat -d 2>/dev/null \
+              | grep -iE "python|igprepper|FATAL|AndroidRuntime" | tail -120
           }
 
           # Briefcase creates and boots the emulator, installs the debug build
@@ -174,34 +182,61 @@ jobs:
           if ! wait_for_logs 1 900; then
             echo "The app never wrote a log file. Last output from the run:"
             tail -80 emulator-run.log
-            "$adb" logcat -d 2>/dev/null | grep -iE "python|igprepper|FATAL|AndroidRuntime" | tail -80
+            show_crash
             exit 1
           fi
           pkill -f "briefcase run" || true
+          "$adb" shell am force-stop "$package"
 
           if [ "$SIGNED" = "true" ]; then
-            # Repeat with the file that will actually be published, which
-            # also proves that Android accepts its signature.
+            # From here on, test the file that will actually be published.
             "$adb" uninstall "$package" >/dev/null
-            "$adb" install "$APK" || { echo "Android refused the signed app"; exit 1; }
-            "$adb" shell monkey -p "$package" -c android.intent.category.LAUNCHER 1 >/dev/null
-            if ! wait_for_logs 2 240; then
-              echo "The signed app never wrote a log file."
-              "$adb" logcat -d | grep -iE "python|igprepper|FATAL|AndroidRuntime" | tail -80
-              exit 1
+
+            # If an earlier build was published, install that first and then
+            # this one over it: the update a phone will actually perform. It
+            # fails if the signature has changed or the version went backwards.
+            previous="$(gh release list --limit 30 --json tagName \
+              --jq '[.[].tagName | select(startswith("phone-"))][0] // empty')"
+            # Only on a tagged build: an untagged trial has no version number
+            # of its own, and Android would rightly reject it as a downgrade.
+            if [ "$GITHUB_REF_TYPE" = "tag" ] && [ -n "$previous" ]                 && [ "$previous" != "$GITHUB_REF_NAME" ]; then
+              mkdir -p previous-build
+              gh release download "$previous" --dir previous-build --pattern '*.apk'
+              "$adb" install previous-build/*.apk >/dev/null \
+                || { echo "Could not install $previous to test updating from it"; exit 1; }
+              "$adb" install -r "$APK" \
+                || { echo "Android refused to update $previous to this build"; exit 1; }
+              echo "PASS: this build installs as an update over $previous"
+            else
+              "$adb" install "$APK" || { echo "Android refused the signed app"; exit 1; }
             fi
           fi
 
-          echo "----- what the app wrote to its log -----"
+          before="$(count_logs)"
+          "$adb" shell am start -n "$activity" --ez selftest true >/dev/null
+          if ! wait_for_logs $((before + 1)) 240; then
+            echo "The app did not start for its self-test."
+            show_crash
+            exit 1
+          fi
+
+          python phone/tools/ci_drive.py "$adb" 480
+          driven=$?
+
+          echo "----- what the app wrote to its logs -----"
           "$adb" shell "cat $logs" | tee app-log.txt
+          if [ $driven -ne 0 ]; then
+            show_crash
+          fi
           "$adb" emu kill >/dev/null 2>&1 || true
 
-          if grep -qE "FAILED while|UNCAUGHT ERROR|could not be created|stopped accepting" app-log.txt; then
+          [ $driven -eq 0 ] || { echo "The self-test did not finish."; exit 1; }
+          if grep -qE "^[0-9:]+  (FAIL  |FAILED while|UNCAUGHT ERROR)|could not be created|stopped accepting" app-log.txt; then
             echo "The app reported a problem; see its log above."
             exit 1
           fi
-          grep -q "=== Done ===" app-log.txt \
-            || { echo "The app did not reach the end of its checks."; exit 1; }
+          grep -q "=== Self-test finished ===" app-log.txt \
+            || { echo "The self-test did not reach its end."; exit 1; }
 
       - name: Keep the build
         uses: actions/upload-artifact@v7
