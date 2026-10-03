@@ -40,7 +40,10 @@ from . import androidimage, framing, imagetests, storage
 from .fixtures import FIXTURES
 from .phonelog import PhoneLog
 
-BUILD = "Build 3"
+# Android draws a switched-off button almost exactly like a working one, so
+# the two states are given colours of their own.
+BUTTON_ON = {"color": "#FFFFFF", "background_color": "#56575C"}
+BUTTON_OFF = {"color": "#6F7075", "background_color": "#232427"}
 FIT_CHOICES = {"Fit the whole photo": "fit", "Crop to fill the frame": "crop"}
 LARGE_FILE_MB = 20
 SELF_TEST_FOLDER = "Download/IGprepper"
@@ -72,10 +75,11 @@ class IGprepperTest(toga.App):
         self.log.listeners.append(self.show_line)
 
         self.guard("describing the phone", self.report_environment)
+        self.guard("darkening the system bars", self.darken_system_bars)
         self.refresh_controls()
 
     def build_screen(self) -> None:
-        heading = toga.Label(f"IGprepper test app - {BUILD}")
+        heading = toga.Label(f"IGprepper {self.version}")
         self.choose_btn = toga.Button(
             "Choose a folder", on_press=self.choose_folder, style=Pack(margin_top=6)
         )
@@ -206,19 +210,33 @@ class IGprepperTest(toga.App):
         """Run something slow off the screen's thread."""
         return await asyncio.get_running_loop().run_in_executor(None, function, *args)
 
+    def darken_system_bars(self) -> None:
+        """The strips above and below the app, which the theme leaves light."""
+        from android.graphics import Color
+        from org.beeware.android import MainActivity
+
+        window = MainActivity.singletonThis.getWindow()
+        window.setStatusBarColor(Color.BLACK)
+        window.setNavigationBarColor(Color.BLACK)
+
+    def switch(self, button, on: bool) -> None:
+        """Enable or disable a button, and make the difference visible."""
+        button.enabled = on
+        button.style.update(**(BUTTON_ON if on else BUTTON_OFF))
+
     def refresh_controls(self) -> None:
         have_folder = self.tree is not None
         free = not self.busy
-        self.choose_btn.enabled = free
-        self.images_btn.enabled = free
-        self.frame_btn.enabled = free
-        self.back_btn.enabled = free
-        self.save_btn.enabled = free and bool(self.picked)
-        self.next_btn.enabled = free and len(self.picked) > 1
-        self.open_btn.enabled = free and have_folder and bool(self.subfolders)
-        self.up_btn.enabled = free and len(self.trail) > 1
-        self.create_btn.enabled = free and have_folder
-        self.files_btn.enabled = free and have_folder
+        self.switch(self.choose_btn, free)
+        self.switch(self.images_btn, free)
+        self.switch(self.frame_btn, free)
+        self.switch(self.back_btn, free)
+        self.switch(self.save_btn, free and bool(self.picked))
+        self.switch(self.next_btn, free and len(self.picked) > 1)
+        self.switch(self.open_btn, free and have_folder and bool(self.subfolders))
+        self.switch(self.up_btn, free and len(self.trail) > 1)
+        self.switch(self.create_btn, free and have_folder)
+        self.switch(self.files_btn, free and have_folder)
 
     async def exclusively(self, doing: str, coroutine) -> None:
         """Run one action at a time, and never let it fail silently."""
@@ -243,8 +261,7 @@ class IGprepperTest(toga.App):
 
     def report_environment(self) -> None:
         log = self.log
-        log.section(f"IGprepper test app, {BUILD}")
-        log.write(f"App version: {self.version}")
+        log.section(f"IGprepper phone app, version {self.version}")
         log.write(f"Log file: {log.location}")
 
         from android.os import Build

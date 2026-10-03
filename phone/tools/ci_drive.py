@@ -21,6 +21,7 @@ SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 300
 LOGS = "/sdcard/Download/IGprepper"
 FINISHED = "=== Self-test finished ==="
 TEST_PHOTO = "igprepper-test-photo.jpg"
+APP_PACKAGE = "org.igprepper.igprepper"
 
 # Buttons to press whenever they are on screen, matched on their whole label.
 BUTTONS = ("use this folder", "allow", "select", "open")
@@ -86,6 +87,10 @@ def label(node: dict) -> str:
 
 
 def act(nodes: list[dict]) -> bool:
+    # Only ever the system's screens. The app has an "Open" button of its
+    # own, and pressing that would walk it into a folder mid-test.
+    nodes = [n for n in nodes if n.get("package") != APP_PACKAGE]
+
     for wanted in BUTTONS:
         for node in nodes:
             if label(node) == wanted and node.get("enabled") != "false":
