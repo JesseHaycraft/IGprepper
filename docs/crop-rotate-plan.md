@@ -1,7 +1,8 @@
 # Crop and rotate: plan
 
-Status: **the arithmetic and the rotation buttons are built. Pinch and drag
-are next.**
+Status: **built for the phone. The gestures pass the emulator's checks but
+have yet to be judged for smoothness on a real phone. The desktop app does
+not have these controls yet.**
 
 Position a photo inside its frame by hand: pinch to zoom, drag to move,
 buttons to rotate by 1 degree or by 90. Built first for the phone, but the
@@ -82,17 +83,21 @@ The preview uses the same function at preview size, as it does today.
   against. They stay for 3 seconds after the last press, then go.
 - Each photo keeps its own placement as you step through a batch.
 
-While fingers are moving, the phone itself moves the picture, so it tracks
-the fingers smoothly; Python is not asked to redraw anything. When the
-fingers lift, the exact preview is drawn by the pipeline and replaces it. The
-two should look the same, and a visible jump at that moment would mean the
-arithmetic disagrees somewhere, so it doubles as a check.
+While fingers are moving, the preview is redrawn from a smaller copy of the
+photo in one quick step, about 20 ms a time, and the pixels are handed
+straight to Android rather than through the toolkit. When the fingers lift,
+the exact preview is drawn. Both are worked out from the same placement by
+the same arithmetic, so the picture does not shift at that moment. (The
+first plan was to let Android slide the picture itself while fingers moved.
+That would have meant a second copy of the arithmetic, on the Android side,
+to keep in step with the first.)
 
-The toolkit's own touch handling reports one finger only. Two-finger gestures
-need a listener attached directly to Android's view, written the same way the
-toolkit writes its own listeners. That is the one piece with real
-uncertainty, so it is built and tried on the phone before anything else
-depends on it.
+The toolkit's own touch handling reports one finger only, so a listener is
+attached directly to Android's view, written the same way the toolkit writes
+its own.
+
+Rotating a photo that has been moved keeps the same spot of it in the middle
+of the frame, including across 45 degrees, where the quarter turns change.
 
 ## 5. Order of work
 
@@ -103,13 +108,13 @@ depends on it.
    *Done.*
 2. **Phone build A**: the rotation buttons and guide lines, driven by the new
    core. No gestures yet. *Done.*
-3. **Phone build B**: one-finger drag and two-finger pinch. Tried on the
-   Pixel for smoothness before being called done.
+3. **Phone build B**: one-finger drag and two-finger pinch. *Built.* To be
+   tried on the Pixel for smoothness before being called done.
 4. **Later**: the same controls in the desktop app.
 
-The build's emulator check can press the buttons and perform a one-finger
-drag. It cannot perform a pinch, so pinch is checked by calling the gesture
-code directly there, and by hand on the phone.
+The build's emulator check presses the buttons, and hands the preview real
+one- and two-finger touches made the way Android makes them. What it cannot
+judge is how the movement feels.
 
 ## 6. Not included
 
