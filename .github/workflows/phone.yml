@@ -95,6 +95,79 @@ jobs:
           echo "apk=$name" >> "$GITHUB_OUTPUT"
           echo "signed=true" >> "$GITHUB_OUTPUT"
 
+      - name: Let the emulator use hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Check the app starts and writes its log
+        # Nobody can see the phone's own logs, so a build that crashes on
+        # launch would cost a whole round trip and explain nothing. Running it
+        # in an emulator first catches that before anything is published.
+        env:
+          APK: ${{ steps.sign.outputs.apk }}
+          SIGNED: ${{ steps.sign.outputs.signed }}
+        run: |
+          set -uo pipefail
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          adb="$ANDROID_HOME/platform-tools/adb"
+          package=org.igprepper.igprepper
+          logs='/sdcard/Download/IGprepper/*.txt'
+
+          count_logs() {
+            "$adb" shell "ls $logs 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
+          }
+          wait_for_logs() {   # $1 = how many log files, $2 = seconds allowed
+            local deadline=$((SECONDS + $2))
+            until [ "$(count_logs)" -ge "$1" ] 2>/dev/null; do
+              [ $SECONDS -lt $deadline ] || return 1
+              sleep 10
+            done
+            sleep 20   # let the app finish writing its report
+          }
+
+          # Briefcase creates and boots the emulator, installs the debug build
+          # and starts it, then follows the app's output until it is stopped.
+          (cd phone && briefcase run android --no-input \
+              --device '{"avd":"beePhone","device_type":"pixel"}' \
+              --Xemulator=-no-window --Xemulator=-no-snapshot \
+              --Xemulator=-no-audio --Xemulator=-no-boot-anim \
+              > ../emulator-run.log 2>&1) &
+
+          if ! wait_for_logs 1 900; then
+            echo "The app never wrote a log file. Last output from the run:"
+            tail -80 emulator-run.log
+            "$adb" logcat -d 2>/dev/null | grep -iE "python|igprepper|FATAL|AndroidRuntime" | tail -80
+            exit 1
+          fi
+          pkill -f "briefcase run" || true
+
+          if [ "$SIGNED" = "true" ]; then
+            # Repeat with the file that will actually be published, which
+            # also proves that Android accepts its signature.
+            "$adb" uninstall "$package" >/dev/null
+            "$adb" install "$APK" || { echo "Android refused the signed app"; exit 1; }
+            "$adb" shell monkey -p "$package" -c android.intent.category.LAUNCHER 1 >/dev/null
+            if ! wait_for_logs 2 240; then
+              echo "The signed app never wrote a log file."
+              "$adb" logcat -d | grep -iE "python|igprepper|FATAL|AndroidRuntime" | tail -80
+              exit 1
+            fi
+          fi
+
+          echo "----- what the app wrote to its log -----"
+          "$adb" shell "cat $logs" | tee app-log.txt
+          "$adb" emu kill >/dev/null 2>&1 || true
+
+          if grep -qE "FAILED while|UNCAUGHT ERROR|could not be created|stopped accepting" app-log.txt; then
+            echo "The app reported a problem; see its log above."
+            exit 1
+          fi
+          grep -q "=== Done ===" app-log.txt \
+            || { echo "The app did not reach the end of its checks."; exit 1; }
+
       - name: Keep the build
         uses: actions/upload-artifact@v7
         with:
