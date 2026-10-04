@@ -72,6 +72,45 @@ class PhoneLog:
         self._resolver, self._uri = resolver, uri
         self.location = f"Download/{FOLDER}/{name}"
 
+    def prune(self, keep: int) -> int:
+        """Delete this app's older log files, leaving the newest `keep`.
+
+        A log is written on every launch, and nobody wants a hundred of them
+        in their Downloads. Returns how many were removed.
+        """
+        if self._resolver is None:
+            return 0
+        from java import jarray, jclass
+        from java.lang import String
+
+        downloads = jclass("android.provider.MediaStore$Downloads")
+        ContentUris = jclass("android.content.ContentUris")
+        # Android shows an app only the downloads it made itself, and the
+        # name and folder are checked as well: nothing else can match.
+        cursor = self._resolver.query(
+            downloads.EXTERNAL_CONTENT_URI,
+            jarray(String)(["_id", "_display_name"]),
+            "relative_path LIKE ? AND _display_name LIKE ?",
+            jarray(String)([f"Download/{FOLDER}/%", "igprepper-log-%.txt"]),
+            "_display_name DESC",
+        )
+        if cursor is None:
+            return 0
+        try:
+            found = []
+            while cursor.moveToNext():
+                found.append(cursor.getLong(0))
+        finally:
+            cursor.close()
+
+        removed = 0
+        for row in found[keep:]:
+            uri = ContentUris.withAppendedId(downloads.EXTERNAL_CONTENT_URI, row)
+            removed += self._resolver.delete(uri, None, None)
+        if removed:
+            self.write(f"Removed {removed} old log file(s); the newest {keep} are kept.")
+        return removed
+
     # --- writing ----------------------------------------------------------
 
     def write(self, message: str = "") -> None:

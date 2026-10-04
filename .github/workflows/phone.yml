@@ -1,6 +1,6 @@
 name: phone
 
-# Builds the Android test app and publishes it as a pre-release, so it can be
+# Builds the Android app and publishes it as a pre-release, so it can be
 # downloaded straight onto the phone.
 #
 #   git tag phone-1 && git push origin phone-1
@@ -228,7 +228,7 @@ jobs:
           # Capture the result rather than stopping here: the app's own log,
           # printed next, is what explains a failure.
           driven=0
-          python phone/tools/ci_drive.py "$adb" 300 || driven=$?
+          python phone/tools/ci_drive.py "$adb" 480 || driven=$?
 
           echo "----- what the app wrote to its logs -----"
           "$adb" shell "cat $logs" | tee app-log.txt

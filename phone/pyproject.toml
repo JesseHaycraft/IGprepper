@@ -1,4 +1,4 @@
-# The Android test app. Kept apart from the desktop app's pyproject.toml so
+# The Android app. Kept apart from the desktop app's pyproject.toml so
 # that the desktop dependencies (PySide6) are never pulled into a phone build.
 
 [tool.briefcase]
@@ -12,7 +12,7 @@ license = "LicenseRef-Proprietary"
 [tool.briefcase.app.igprepper]
 formal_name = "IGprepper"
 # Kept generic, like the bundle: this text is embedded in every build.
-description = "IGprepper phone test app"
+description = "Frames photos for Instagram"
 # The image pipeline is the desktop app's, used unchanged. Bundling the
 # whole package also carries its desktop screens along, which are never
 # imported here and so never need their desktop-only dependencies.
@@ -35,6 +35,14 @@ min_os_version = "29"
 # The un-suffixed theme is Material's dark one. Naming it outright, rather
 # than a day/night theme, keeps the app dark whatever the phone is set to.
 base_theme = "Theme.MaterialComponents"
+# One accent, used for the main action on each screen and picked up by the
+# slider, the switch and the buttons in pop-ups.
+primary_color = "#8AB4F8"
+primary_color_dark = "#000000"
+accent_color = "#8AB4F8"
+# Lets the app answer the phone's Back gesture itself (Android 13 onwards),
+# so that Back leaves the editor instead of closing the app.
+android_manifest_application_attrs_extra_content = 'android:enableOnBackInvokedCallback="true"'
 build_gradle_dependencies = [
     "com.google.android.material:material:1.12.0",
     "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0",
