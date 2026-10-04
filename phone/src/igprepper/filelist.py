@@ -5,9 +5,10 @@ dozen rows and hopeless for a camera folder with thousands. Android's own
 list keeps only the rows on screen and reuses them as they scroll off, so
 this hands it the rows one at a time as it asks.
 
-Each row is a small picture, a name, and for a photo that can be chosen, a
-mark showing whether it has been. Over the list sit a line of text for when
-there is nothing to list, and a counter in the bottom corner.
+Each row is, for a photo that can be chosen, a mark showing whether it has
+been; then a small picture and a name. Over the list sit a line of text for
+when there is nothing to list, and a counter in the bottom right corner. The
+marks are on the left so that the counter never sits on top of one.
 
 This module only imports on Android.
 """
@@ -197,6 +198,12 @@ class FileList:
         row.setPadding(androidui.dp(10), 0, androidui.dp(12), 0)
         row.setLayoutParams(AbsListLayout(FILL, androidui.dp(ROW_DP)))
 
+        mark = ImageView(context)
+        side = androidui.dp(MARK_DP)
+        before = LinearLayoutParams(side, side)
+        before.setMarginEnd(androidui.dp(10))
+        row.addView(mark, before)
+
         picture = ImageView(context)
         side = androidui.dp(THUMB_DP)
         row.addView(picture, LinearLayoutParams(side, side))
@@ -210,10 +217,6 @@ class FileList:
         beside.setMarginStart(androidui.dp(12))
         beside.setMarginEnd(androidui.dp(8))
         row.addView(name, beside)
-
-        mark = ImageView(context)
-        side = androidui.dp(MARK_DP)
-        row.addView(mark, LinearLayoutParams(side, side))
         return row
 
     def row_view(self, position: int, convert):
@@ -228,9 +231,9 @@ class FileList:
             return convert if convert is not None else View(androidui.activity())
 
     def fill(self, row, entry) -> None:
-        picture = cast(ImageView, row.getChildAt(0))
-        name = cast(TextView, row.getChildAt(1))
-        mark = cast(ImageView, row.getChildAt(2))
+        mark = cast(ImageView, row.getChildAt(0))
+        picture = cast(ImageView, row.getChildAt(1))
+        name = cast(TextView, row.getChildAt(2))
 
         name.setText(entry.name)
         usable = entry.is_dir or entry.is_photo
@@ -254,7 +257,9 @@ class FileList:
                 self.icon("checked", ACCENT) if checked else self.icon("unchecked", FAINT)
             )
         else:
-            mark.setVisibility(View.GONE)
+            # Where photos can be chosen, other rows keep the space, so that
+            # every picture and name lines up.
+            mark.setVisibility(View.INVISIBLE if self.selectable else View.GONE)
         row.setBackgroundColor(
             Color.parseColor(CHECKED_ROW) if checked else Color.TRANSPARENT
         )
