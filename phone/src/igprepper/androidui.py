@@ -78,6 +78,11 @@ def plain_button(native) -> None:
     native.setAllCaps(False)
     native.setMinWidth(0)
     native.setMinimumWidth(0)
+    # Android's side padding is generous enough that three labelled buttons
+    # do not fit across a phone.
+    native.setPadding(
+        dp(10), native.getPaddingTop(), dp(10), native.getPaddingBottom()
+    )
 
 
 def label(native, text: str, icon=None) -> None:
