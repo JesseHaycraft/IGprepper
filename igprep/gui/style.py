@@ -11,13 +11,6 @@ from PySide6.QtWidgets import QApplication
 
 HINT_ALPHA = 165
 
-# Practical ceiling for the border control. The geometric limit is far higher
-# -- nearly half the width on tall ratios -- but a border that thick is not a
-# photograph any more, and allowing it squeezes the useful 2-8% range into the
-# first tenth of the slider.
-MAX_BORDER_PCT = 15.0
-
-
 def _window_text():
     app = QApplication.instance()
     palette = app.palette() if app else QPalette()

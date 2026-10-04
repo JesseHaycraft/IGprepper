@@ -1,13 +1,10 @@
 """Launching the app: file arguments and the Linux library check."""
 
-import os
 import sys
 
 from PIL import Image
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from igprep.gui.main import (  # noqa: E402
+from igprep.gui.main import (
     file_arguments, warn_if_qt_libs_missing,
 )
 

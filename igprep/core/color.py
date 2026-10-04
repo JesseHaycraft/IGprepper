@@ -31,18 +31,6 @@ FLAGS = ImageCms.Flags.BLACKPOINTCOMPENSATION
 _TRANSFORMABLE = {"RGB", "CMYK", "L"}
 
 
-def embedded_profile_name(img: Image.Image) -> str | None:
-    """Human-readable name of the embedded profile, for display in the UI."""
-    raw = img.info.get("icc_profile")
-    if not raw:
-        return None
-    try:
-        profile = ImageCms.ImageCmsProfile(io.BytesIO(raw))
-        return ImageCms.getProfileDescription(profile).strip() or None
-    except Exception:  # malformed profile blobs are common in the wild
-        return None
-
-
 def _split_alpha(img: Image.Image) -> tuple[Image.Image, Image.Image | None]:
     if img.mode == "P":
         img = img.convert("RGBA" if "transparency" in img.info else "RGB")
@@ -67,14 +55,10 @@ def to_srgb(img: Image.Image) -> Image.Image:
         try:
             src = ImageCms.ImageCmsProfile(io.BytesIO(raw))
             dst = ImageCms.ImageCmsProfile(io.BytesIO(SRGB_BYTES))
-            converted = ImageCms.profileToProfile(
+            base = ImageCms.profileToProfile(
                 base, src, dst,
                 renderingIntent=INTENT, outputMode="RGB", flags=FLAGS,
             )
-            if converted is not None:
-                base = converted
-            else:
-                base = base.convert("RGB")
         except Exception as exc:
             log.warning("ICC transform failed (%s); assuming sRGB", exc)
             base = base.convert("RGB")

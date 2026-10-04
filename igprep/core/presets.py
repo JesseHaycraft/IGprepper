@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Generic, TypeVar
 
+from .jsonfile import write_json
 from .settings import Framing, OutputSettings, config_dir
 
 log = logging.getLogger(__name__)
@@ -74,9 +74,6 @@ class PresetStore(Generic[T]):
 
     def names(self) -> list[str]:
         return list(self._raw)
-
-    def __len__(self) -> int:
-        return len(self._raw)
 
     def find(self, name: str) -> str | None:
         """The stored spelling matching `name`, ignoring case."""
@@ -210,10 +207,6 @@ class PresetLibrary:
         """Written through on every change, so a crash cannot lose a preset
         that appeared to save."""
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(self.to_dict(), fh, indent=2)
-            os.replace(tmp, self.path)
+            write_json(self.path, self.to_dict(), indent=2)
         except OSError as exc:
             log.warning("could not save presets to %s (%s)", self.path, exc)

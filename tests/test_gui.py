@@ -4,22 +4,19 @@ These run against Qt's offscreen platform, so they exercise real widgets,
 signals and painting without needing a display.
 """
 
-import os
 
 import pytest
 from PIL import Image
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 
-from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-from igprep.core import naming  # noqa: E402
-from igprep.core.settings import Framing, OutputSettings, Settings  # noqa: E402
-from igprep.gui.main import MainWindow  # noqa: E402
-from igprep.gui.preview import ProxyCache, render_preview  # noqa: E402
-from igprep.gui.queue import COL_FRAMING, COL_OUTPUT, COL_STATUS  # noqa: E402
-from igprep.gui.style import MAX_BORDER_PCT  # noqa: E402
+from igprep.core import naming
+from igprep.core.settings import Framing, OutputSettings, Settings
+from igprep.gui.main import MainWindow
+from igprep.gui.preview import ProxyCache, render_preview
+from igprep.gui.queue import COL_FRAMING, COL_OUTPUT, COL_STATUS
+from igprep.gui.panel import MAX_BORDER_PCT
 
 
 # --- the list is selection only -------------------------------------------
@@ -49,7 +46,7 @@ def test_duplicates_are_ignored(window, photos):
 def test_list_reports_each_photo_framing_read_only(window, photos):
     window.queue.add_paths(photos(1))
     text = window.queue.item(0, COL_FRAMING).text()
-    assert "3:4" in text and "fit" in text and "4%" in text
+    assert "3:4" in text and "fit" in text and "3%" in text
 
 
 def test_list_shows_the_resolved_output_name(window, photos):

@@ -14,7 +14,7 @@ from __future__ import annotations
 from PIL import Image, ImageDraw
 
 from . import geometry as g
-from .render import place, place_quickly
+from .render import RESAMPLE, place, place_quickly
 
 PREVIEW_CANVAS_WIDTH = 600
 PROXY_MAX = 1600
@@ -29,7 +29,7 @@ GUIDE_DASH = 6
 def make_proxy(image: Image.Image, max_side: int = PROXY_MAX) -> Image.Image:
     """A copy of `image` no larger than `max_side` on its longest edge."""
     proxy = image.copy()
-    proxy.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    proxy.thumbnail((max_side, max_side), RESAMPLE)
     return proxy
 
 
@@ -62,7 +62,7 @@ def render_preview(
     else:
         img = place(proxy, layout)
         if img.size != layout.scaled:
-            img = img.resize(layout.scaled, Image.Resampling.LANCZOS)
+            img = img.resize(layout.scaled, RESAMPLE)
 
     canvas = Image.new("RGB", layout.canvas, frame_color)
     canvas.paste(img, layout.origin)

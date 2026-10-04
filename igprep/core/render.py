@@ -40,7 +40,9 @@ def load(path: str | Path) -> Image.Image:
     img.load()
     # Must happen before any geometry is computed, or portrait shots planned
     # from a landscape-shaped buffer come out cropped along the wrong axis.
-    return ImageOps.exif_transpose(img) or img
+    # In place: a photo already upright is then left alone, not copied.
+    ImageOps.exif_transpose(img, in_place=True)
+    return img
 
 
 def sharpen_percent(amount: int, scale: float) -> int:

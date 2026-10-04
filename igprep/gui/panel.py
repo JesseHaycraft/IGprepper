@@ -21,13 +21,19 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import geometry as g
-from ..core import naming
+from ..core import naming, render
 from ..core.presets import PresetStore
-from ..core.settings import Framing, OutputSettings, Settings
+from ..core.settings import DEFAULT_MODE, Framing, OutputSettings, Settings
 from .preset_bar import PresetBar
-from .style import MAX_BORDER_PCT, error_style, hint_style
+from .style import error_style, hint_style
 
 BORDER_STEPS = 10  # slider granularity: tenths of a percent
+
+# Practical ceiling for the border control. The geometric limit is far higher
+# -- nearly half the width on tall ratios -- but a border that thick is not a
+# photograph any more, and allowing it squeezes the useful 2-8% range into the
+# first tenth of the slider.
+MAX_BORDER_PCT = 15.0
 
 
 class FramingPanel(QWidget):
@@ -39,7 +45,7 @@ class FramingPanel(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._loading = False
-        self._frame_color = "#FFFFFF"
+        self._frame_color = render.DEFAULT_FRAME_COLOR
         self._width = g.DEFAULT_OUTPUT_WIDTH
 
         layout = QVBoxLayout(self)
@@ -186,7 +192,9 @@ class FramingPanel(QWidget):
         return g.ratio_for(self.ratio.currentData() or g.DEFAULT_RATIO)
 
     def _update_border_range(self) -> None:
-        """Capped for usability, and again by geometry on very wide ratios."""
+        """Capped for usability. The geometric limit is the larger for every
+        ratio the app offers; it is consulted in case one is ever added for
+        which it is not."""
         cap = min(
             MAX_BORDER_PCT, g.max_border_pct(self._current_ratio(), self._width)
         )
@@ -207,7 +215,7 @@ class FramingPanel(QWidget):
 
     def set_width(self, width: int) -> None:
         """The batch output width changes what the framing resolves to."""
-        self._width = width if width in g.OUTPUT_WIDTHS else g.DEFAULT_OUTPUT_WIDTH
+        self._width = g.usable_width(width)
         self._update_border_range()
         self._update_labels()
 
@@ -216,9 +224,7 @@ class FramingPanel(QWidget):
     def load(self, framing: Framing, width: int | None = None) -> None:
         self._loading = True
         if width is not None:
-            self._width = (
-                width if width in g.OUTPUT_WIDTHS else g.DEFAULT_OUTPUT_WIDTH
-            )
+            self._width = g.usable_width(width)
         self.ratio.setCurrentIndex(max(0, self.ratio.findData(framing.ratio)))
         self.mode.setCurrentIndex(max(0, self.mode.findData(framing.mode)))
         self._update_border_range()
@@ -232,7 +238,7 @@ class FramingPanel(QWidget):
     def to_framing(self) -> Framing:
         return Framing(
             ratio=self.ratio.currentData() or g.DEFAULT_RATIO,
-            mode=self.mode.currentData() or "fit",
+            mode=self.mode.currentData() or DEFAULT_MODE,
             border_pct=self.border_spin.value(),
             frame_color=self._frame_color,
         )

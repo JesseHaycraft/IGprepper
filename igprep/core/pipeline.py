@@ -58,8 +58,22 @@ class Probe:
     captured: datetime
 
 
+# What has been read from each file, and the file's date and size when it
+# was read. The photo list asks about every photo on every change to any
+# setting; without this each of those would open every file again.
+_PROBED: dict[Path, tuple[tuple[int, int], Probe]] = {}
+_MOST_PROBED = 4096
+
+
 def probe(path: Path) -> Probe:
     """Read dimensions and capture time without decoding the pixels."""
+    path = Path(path)
+    stat = path.stat()
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    known = _PROBED.get(path)
+    if known is not None and known[0] == stamp:
+        return known[1]
+
     with Image.open(path) as img:
         size = img.size
         try:
@@ -78,7 +92,11 @@ def probe(path: Path) -> Probe:
             captured = datetime.strptime(str(raw), "%Y:%m:%d %H:%M:%S")
         except ValueError:
             captured = None
-    return Probe(size, captured or datetime.fromtimestamp(path.stat().st_mtime))
+    found = Probe(size, captured or datetime.fromtimestamp(stat.st_mtime))
+    if len(_PROBED) >= _MOST_PROBED:
+        _PROBED.clear()
+    _PROBED[path] = (stamp, found)
+    return found
 
 
 @dataclass

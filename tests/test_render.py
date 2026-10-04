@@ -1,10 +1,8 @@
-import pytest
-from PIL import Image, ImageCms
+from PIL import Image
 
 from igprep.core import color, geometry as g, render
 
 WHITE = (255, 255, 255)
-RED = (220, 40, 40)
 
 
 def _framed(src, *, ratio="3:4", mode="crop", border_pct=4.0, sharpen=0,
@@ -151,13 +149,6 @@ def test_a_corrupt_profile_does_not_fail_the_job(tmp_path):
     converted = color.to_srgb(render.load(path))
     assert converted.mode == "RGB"
     assert converted.size == (600, 600)
-
-
-def test_profile_name_is_readable(p3_profile_bytes):
-    img = Image.new("RGB", (10, 10))
-    assert color.embedded_profile_name(img) is None
-    img.info["icc_profile"] = p3_profile_bytes
-    assert color.embedded_profile_name(img) == "Display P3 (test)"
 
 
 def test_saved_jpeg_embeds_srgb_and_uses_444(tmp_path, gradient):

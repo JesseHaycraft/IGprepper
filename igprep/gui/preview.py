@@ -20,7 +20,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from ..core import color, geometry as g
-from ..core.preview import PREVIEW_CANVAS_WIDTH, PROXY_MAX, render_preview  # noqa: F401
+from ..core.preview import PROXY_MAX, render_preview  # noqa: F401
+from ..core.render import RESAMPLE
 
 CACHE_LIMIT = 24
 
@@ -35,9 +36,9 @@ def load_proxy(path: Path) -> Image.Image:
     # draft() lets the JPEG decoder skip most of its work by decoding at a
     # reduced DCT scale -- the single biggest win for preview responsiveness.
     img.draft("RGB", (PROXY_MAX, PROXY_MAX))
-    img = ImageOps.exif_transpose(img) or img
+    ImageOps.exif_transpose(img, in_place=True)
     img = color.to_srgb(img)
-    img.thumbnail((PROXY_MAX, PROXY_MAX), Image.Resampling.LANCZOS)
+    img.thumbnail((PROXY_MAX, PROXY_MAX), RESAMPLE)
     return img
 
 
@@ -61,9 +62,6 @@ class ProxyCache:
         while len(self._items) > self._limit:
             self._items.popitem(last=False)
         return proxy
-
-    def clear(self) -> None:
-        self._items.clear()
 
 
 def pil_to_qpixmap(img: Image.Image) -> QPixmap:

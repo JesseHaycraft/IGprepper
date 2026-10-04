@@ -4,13 +4,10 @@ Fixtures (`window`, `photos`, `dialogs`) come from conftest; `dialogs` stubs
 the preset bar's modal prompts so a headless run never blocks.
 """
 
-import os
 
 from PIL import Image
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from igprep.gui.main import MainWindow  # noqa: E402
+from igprep.gui.main import MainWindow
 
 
 def _pick(bar, name):
@@ -303,7 +300,7 @@ def test_repicking_the_same_preset_discards_your_edits(window, dialogs):
     assert "modified" in window.framing.presets.combo.currentText()
 
     _pick(window.framing.presets, "Square")
-    assert window.framing.border_spin.value() == 4.0
+    assert window.framing.border_spin.value() == 3.0
     assert "modified" not in window.framing.presets.combo.currentText()
 
 

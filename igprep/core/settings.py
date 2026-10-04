@@ -17,11 +17,12 @@ import json
 import logging
 import os
 import sys
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
 from . import geometry as g
 from . import naming, render
+from .jsonfile import write_json
 
 log = logging.getLogger(__name__)
 
@@ -57,8 +58,24 @@ def _clamp(value, low, high):
     return max(low, min(high, value))
 
 
+class _Record:
+    """What `Framing` and `OutputSettings` have in common: each is a flat
+    set of values that can be copied, and rebuilt from a saved file."""
+
+    def copy(self):
+        return replace(self)
+
+    @classmethod
+    def from_dict(cls, data):
+        """Built from saved values, ignoring any this version does not know."""
+        if not isinstance(data, dict):
+            return cls()
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
+
 @dataclass
-class Framing:
+class Framing(_Record):
     """How a single photo sits inside its canvas."""
 
     ratio: str = g.DEFAULT_RATIO
@@ -71,12 +88,7 @@ class Framing:
 
     def max_border_pct(self, width: int = g.DEFAULT_OUTPUT_WIDTH) -> float:
         """Cap for this ratio -- wide ratios run out of room sooner."""
-        if width not in g.OUTPUT_WIDTHS:
-            width = g.DEFAULT_OUTPUT_WIDTH
-        return g.max_border_pct(self.aspect(), width)
-
-    def copy(self) -> "Framing":
-        return Framing(**asdict(self))
+        return g.max_border_pct(self.aspect(), g.usable_width(width))
 
     def normalized(self, width: int = g.DEFAULT_OUTPUT_WIDTH) -> "Framing":
         f = self.copy()
@@ -89,16 +101,9 @@ class Framing:
         f.border_pct = float(_clamp(f.border_pct, 0.0, f.max_border_pct(width)))
         return f
 
-    @classmethod
-    def from_dict(cls, data) -> "Framing":
-        if not isinstance(data, dict):
-            return cls()
-        known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in known})
-
 
 @dataclass
-class OutputSettings:
+class OutputSettings(_Record):
     """How the batch is encoded and where it lands.
 
     Grouped rather than left flat on `Settings` so that it is the same shape
@@ -117,37 +122,26 @@ class OutputSettings:
     template: str = naming.DEFAULT_TEMPLATE
     collision: str = "increment"
 
-    def copy(self) -> "OutputSettings":
-        return OutputSettings(**asdict(self))
-
     def normalized(self) -> "OutputSettings":
         o = self.copy()
         if o.dest_mode not in DEST_MODES:
             o.dest_mode = "source"
         if o.collision not in COLLISION_POLICIES:
             o.collision = "increment"
-        if o.output_width not in g.OUTPUT_WIDTHS:
-            o.output_width = g.DEFAULT_OUTPUT_WIDTH
+        o.output_width = g.usable_width(o.output_width)
         o.quality = int(_clamp(o.quality, 60, 100))
         o.sharpen = int(_clamp(o.sharpen, 0, 100))
         if naming.validate(o.template) is not None:
             o.template = naming.DEFAULT_TEMPLATE
         return o
 
-    @classmethod
-    def from_dict(cls, data) -> "OutputSettings":
-        if not isinstance(data, dict):
-            return cls()
-        known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in known})
-
 
 @dataclass
 class Settings:
     """Batch-wide settings, plus the framing newly added photos inherit."""
 
-    # Applied to photos as they are added; the panel keeps this in step with
-    # whatever was last used, so a second drop matches the first.
+    # Applied to photos as they are added. The window keeps this in step
+    # with the last framing edited, so a second drop matches the first.
     framing: Framing = field(default_factory=Framing)
     output: OutputSettings = field(default_factory=OutputSettings)
 
@@ -200,11 +194,6 @@ class Settings:
     def save(self, path: Path | None = None) -> None:
         path = path or config_path()
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            # Write-then-replace so a crash mid-write cannot corrupt the file.
-            tmp = path.with_suffix(".tmp")
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(self.to_dict(), fh, indent=2)
-            os.replace(tmp, path)
+            write_json(path, self.to_dict(), indent=2)
         except OSError as exc:
             log.warning("could not save settings to %s (%s)", path, exc)

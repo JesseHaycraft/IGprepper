@@ -43,7 +43,7 @@ RATIOS_BY_KEY: dict[str, AspectRatio] = {r.key: r for r in RATIOS}
 DEFAULT_RATIO = "3:4"
 OUTPUT_WIDTHS = (1080, 1440)
 DEFAULT_OUTPUT_WIDTH = 1080
-DEFAULT_BORDER_PCT = 4.0
+DEFAULT_BORDER_PCT = 3.0
 
 # Instagram's profile-grid thumbnail ratio.
 GRID_RW, GRID_RH = 3, 4
@@ -66,6 +66,11 @@ def ratio_for(key: str) -> AspectRatio:
         return RATIOS_BY_KEY[key]
     except KeyError:
         raise GeometryError(f"unknown aspect ratio {key!r}") from None
+
+
+def usable_width(width) -> int:
+    """`width` if it is one the app offers, otherwise the default."""
+    return width if width in OUTPUT_WIDTHS else DEFAULT_OUTPUT_WIDTH
 
 
 def canvas_size(ratio: AspectRatio, width: int) -> tuple[int, int]:

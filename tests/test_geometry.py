@@ -60,7 +60,9 @@ def test_grid_crop_direction(key, expected):
 
 
 def test_crop_mode_fills_the_box_exactly():
-    layout = g.plan((6000, 4000), ratio=g.ratio_for("3:4"), mode="crop")
+    layout = g.plan(
+        (6000, 4000), ratio=g.ratio_for("3:4"), mode="crop", border_pct=4.0
+    )
     assert layout.canvas == (1080, 1440)
     assert layout.border == 43
     assert layout.box == (994, 1354)

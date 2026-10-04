@@ -10,7 +10,7 @@ def test_defaults_match_the_spec():
     s = Settings()
     assert (s.framing.ratio, s.framing.mode) == ("3:4", "fit")
     assert (s.output.output_width, s.output.sharpen) == (1080, 30)
-    assert (s.framing.border_pct, s.framing.frame_color) == (4.0, "#FFFFFF")
+    assert (s.framing.border_pct, s.framing.frame_color) == (3.0, "#FFFFFF")
     assert s.output.quality == 95
 
 

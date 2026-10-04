@@ -13,7 +13,7 @@ from ..core.settings import Settings
 
 
 class ProcessWorker(QThread):
-    progress = Signal(int, int, str)   # completed, total, current filename
+    progress = Signal(int, int, str)   # completed, total, the file just finished
     item_done = Signal(int, object)    # row index, Result
     finished_all = Signal(list)        # list[Result]
 

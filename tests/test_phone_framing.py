@@ -85,7 +85,7 @@ def test_frame_produces_an_instagram_file():
     result = framing.frame(image, Framing())
 
     assert result.canvas == (1080, 1440)
-    assert result.border == 43
+    assert result.border == 32
     assert result.source_size == (3000, 2000)
     with Image.open(io.BytesIO(result.jpeg)) as saved:
         assert saved.size == (1080, 1440)

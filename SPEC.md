@@ -49,7 +49,7 @@ Order matters. Each step exists for a reason.
 4. **Crop or fit** (per-photo toggle, see §4).
 5. **Single-step Lanczos resize** to the photo box. One step, never iterative.
 6. **Unsharp mask.** Downscaling always softens. Starting values: radius 0.8,
-   amount 60%, threshold 2, with amount scaled by the downscale factor.
+   amount 30%, threshold 2, with amount scaled by the downscale factor.
    Exposed as a 0–100 slider, and can be switched off.
 7. **Composite onto the frame canvas.**
 8. **Strip metadata, embed sRGB.**
@@ -65,7 +65,7 @@ differently from what the user is used to seeing. Possible advanced flag later.
 
 ## 3. Border model
 
-- Thickness is a **percentage of canvas width**. Default **4%** (43px at 1080).
+- Thickness is a **percentage of canvas width**. Default **3%** (32px at 1080).
 - Because every Instagram canvas is the same width, this yields an identical
   pixel border on every ratio — portraits and landscapes look identically
   framed side by side in the grid.
@@ -93,7 +93,8 @@ Center-only; no pan or zoom. The default is **fit**.
 - **Fit** — scale the whole photo to fit inside the photo box. Nothing is lost;
   white fills the remainder, so the mat is thicker on two sides.
 
-Each queue row also overrides the target ratio, defaulting to the global choice.
+Each photo carries its own ratio, fit and border; see section 6. A photo
+added to the list starts with whatever the framing panel shows.
 
 **Upscale warning:** flag any row whose source is too small to fill the photo
 box without enlargement.
@@ -114,7 +115,8 @@ Tokens: `{name}` `{custom}` `{n}` (paddable, `{n:03}`) `{ratio}` `{w}` `{h}`
 Destination: user-specified folder, or the source photo's own folder.
 
 **Collisions:** auto-increment by default (skip / overwrite also available).
-Hard refusal if the resolved output path equals the source file.
+The source file is never overwritten: if the resolved output path is the
+source itself, a numbered name is used instead, whatever the policy.
 
 ---
 
@@ -151,7 +153,7 @@ Accepted input: JPEG, PNG, TIFF, WebP. No HEIC, no camera RAW.
 ## 7. Settings persistence
 
 Last-used settings restored on launch, stored as JSON in the standard per-OS
-config location. No named presets for now.
+config location. Named presets came later; see section 13.
 
 ---
 
@@ -160,12 +162,17 @@ config location. No named presets for now.
 ```
 igprep/
   core/        pure pipeline — no UI imports, unit-testable
-    geometry.py    canvas/photo-box math, crop and fit rects
+    geometry.py    canvas/photo-box math, crop and fit rects, placement
     color.py       ICC handling
     render.py      resize, sharpen, composite, encode
+    preview.py     the small scale-model preview
     naming.py      template engine
+    pipeline.py    one queued photo, from file to written JPEG
+    settings.py    per-photo framing and batch settings, saved between runs
+    presets.py     named presets
   gui/         PySide6 app
-  tests/       reference-image and geometry tests
+tests/         geometry, rendering, naming, settings and headless GUI tests
+phone/         the Android app, which uses igprep/core unchanged
 ```
 
 Keeping `core/` UI-free means the pipeline is testable in isolation, and a CLI
@@ -216,7 +223,7 @@ at 4% and 1080 wide, for every ratio, with sRGB embedded and 4:4:4 chroma.
 |---|---|---|
 | Aspect ratio | 3:4 portrait | per photo |
 | Fit | Fit the whole photo | per photo |
-| Border | 4% (43px at 1080) | per photo |
+| Border | 3% (32px at 1080) | per photo |
 | Frame colour | #FFFFFF | per photo |
 | Output width | 1080 | batch |
 | JPEG quality | 95 | batch |
@@ -241,9 +248,9 @@ config directory:
 configuration, and a preset that overwrote the name you just typed would be a
 nuisance.
 
-**Applying goes through the normal edit path** -- the bar loads the values into
-the panel and emits `changed` -- so multi-select and *Apply to all* need no
-special case for presets.
+**Applying goes through the normal edit path** -- the bar asks, the panel
+loads the values and emits `changed` -- so multi-select and *Apply to all*
+need no special case for presets.
 
 **The combo uses `activated`, not `currentIndexChanged`.** The latter is silent
 when you pick the item already selected, which would make re-choosing a preset

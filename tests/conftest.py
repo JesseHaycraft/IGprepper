@@ -1,7 +1,7 @@
 import os
 
 import pytest
-from PIL import Image, ImageCms
+from PIL import Image
 
 # Set before any Qt import, so the GUI fixtures below need no display.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -45,24 +45,12 @@ def p3_profile_bytes():
     import sys
     from pathlib import Path
 
-    tools = Path(__file__).resolve().parents[1] / "phone" / "tools"
-    sys.path.insert(0, str(tools))
+    tools = str(Path(__file__).resolve().parents[1] / "phone" / "tools")
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
     import make_fixtures
 
     return make_fixtures.display_p3_profile()
-
-
-def write_jpeg(img, path, **kw):
-    img.save(path, "JPEG", quality=98, **kw)
-    return path
-
-
-@pytest.fixture
-def jpeg_file(tmp_path):
-    def make(img, name="src.jpg", **kw):
-        return write_jpeg(img, tmp_path / name, **kw)
-
-    return make
 
 
 # --- shared GUI fixtures ---------------------------------------------------

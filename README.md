@@ -61,7 +61,7 @@ overlay to see what the others lose.
 
 A percentage of the canvas width. Every Instagram canvas is 1080 wide, so the
 same percentage produces the same pixel border at every ratio and your
-portraits and landscapes match. 4% is 43px.
+portraits and landscapes match. The default, 3%, is 32px.
 
 ### Fit or crop
 
@@ -92,7 +92,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-201 tests. The GUI ones run headless, so they need no display. CI runs the lot
+The GUI tests run headless, so they need no display. CI runs the lot
 on Windows and Ubuntu for every push.
 
 `igprep/core/` holds the image pipeline and imports nothing from the UI, so it
