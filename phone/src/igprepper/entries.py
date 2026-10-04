@@ -19,6 +19,7 @@ PHOTO_TYPES = frozenset(
 # Storage apps do not always know a file's type; its name usually does.
 PHOTO_ENDINGS = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif")
 
+
 @dataclass
 class Entry:
     doc_id: str
@@ -35,7 +36,6 @@ class Entry:
         if self.is_dir:
             return False
         return self.mime in PHOTO_TYPES or self.name.lower().endswith(PHOTO_ENDINGS)
-
 
 
 def ordered(entries: list[Entry]) -> list[Entry]:

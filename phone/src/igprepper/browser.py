@@ -23,9 +23,9 @@ from toga.style.pack import CENTER, ROW
 
 from . import androidui, entries, storage, words
 from .filelist import FileList
+from .palette import DIM
 from .places import Place
 
-DIM = "#9AA0A6"
 # Cloud storage hands over a large folder in instalments.
 RECHECK_SECONDS = 1.5
 RECHECKS = 40
@@ -47,6 +47,7 @@ class Browser:
         # Folders this app created, whose names may therefore be logged.
         self.created: set[str] = set()
         self.still_loading = False
+        self.rechecking = False  # a further look at this folder is booked
         self.visit = 0  # counts changes of folder, to drop late answers
         self.name_dialog = None
         self.files: FileList | None = None
@@ -143,7 +144,7 @@ class Browser:
 
     def show_path(self) -> None:
         if self.path_view is not None:
-            self.path_view.setText(self.path)
+            androidui.set_text(self.path_view, self.path)
         self.app.relabel(
             self.choose_btn, "Change" if self.tree is not None else "Choose folder"
         )
@@ -335,7 +336,7 @@ class Browser:
         visit = self.visit
         had_checks = bool(self.checked)
         self.checked = set()
-        self.entries, self.still_loading = [], True
+        self.entries, self.still_loading, self.rechecking = [], True, False
         self.show_path()
         self.show_rows(fresh=True)
         if had_checks:
@@ -351,11 +352,8 @@ class Browser:
                 if self.files is not None:
                     self.files.say("This folder could not be opened")
             return
-        if visit != self.visit:
-            return
-        self.take(found, fresh=True)
-        if found.loading:
-            self.app.loop.call_later(RECHECK_SECONDS, self.recheck, visit, 1)
+        if visit == self.visit:
+            self.take(found, visit)
 
     async def reload(self, ask_again: bool = False) -> None:
         """Read the same folder again, keeping what is checked. `ask_again`
@@ -367,11 +365,14 @@ class Browser:
         visit = self.visit
         found = await self.app.work(storage.listing, self.tree, self.here)
         if visit == self.visit:
-            self.take(found, fresh=False)
+            self.take(found, visit)
 
-    def take(self, found: storage.Listing, fresh: bool) -> None:
+    def take(self, found: storage.Listing, visit: int, attempt: int = 0) -> None:
+        """Show a listing of the folder we are in. If the storage app says
+        there is more to come, look again shortly, up to a point."""
         self.entries = entries.ordered(found.entries)
-        self.still_loading = found.loading
+        more = found.loading and attempt < RECHECKS
+        self.still_loading = more
         kept = entries.still_there(self.entries, self.checked)
         dropped = kept != self.checked
         self.checked = kept
@@ -381,9 +382,12 @@ class Browser:
             f"other file(s){', and still loading' if found.loading else ''}. "
             "Names are not logged."
         )
-        self.show_rows(fresh=fresh)
+        self.show_rows()
         if dropped:
             self.app.selection_changed()
+        if more and not self.rechecking:
+            self.rechecking = True
+            self.app.loop.call_later(RECHECK_SECONDS, self.recheck, visit, attempt + 1)
 
     def recheck(self, visit: int, attempt: int) -> None:
         if visit == self.visit:
@@ -397,13 +401,15 @@ class Browser:
             found = None
         if visit != self.visit:
             return
-        if found is None or attempt >= RECHECKS:
-            self.still_loading = False
-            self.show_rows()
-            return
-        self.take(found, fresh=False)
-        if found.loading:
-            self.app.loop.call_later(RECHECK_SECONDS, self.recheck, visit, attempt + 1)
+        self.rechecking = False
+        try:
+            if found is None:
+                self.still_loading = False
+                self.show_rows()
+            else:
+                self.take(found, visit, attempt)
+        except Exception:
+            self.app.log.exception(f"showing more of the {self.side} folder")
 
     # --- making a folder ------------------------------------------------------------------
 

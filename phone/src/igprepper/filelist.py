@@ -20,7 +20,7 @@ from __future__ import annotations
 from java import cast, dynamic_proxy, jclass
 from PIL import Image, ImageOps
 
-from . import androidui
+from . import androidui, palette
 from .thumbs import Thumbnails
 
 AbsListLayout = jclass("android.widget.AbsListView$LayoutParams")
@@ -54,14 +54,16 @@ TILE_GAP_DP = 6
 TILE_THUMB_PX = 300
 # How many pictures to keep to hand: small ones are cheap, large ones not.
 KEEP_SMALL, KEEP_LARGE = 400, 80
+TILE_EDGE_DP = 3        # the band round a tile that colours when it is checked
+TILE_UNMEASURED_DP = 150  # a tile's height before Android has measured the columns
 FILL, WRAP = -1, -2  # Android's "as big as the parent" and "as big as needed"
 
-PANEL = "#1D1E21"
-TILE = "#2A2C30"
-TEXT = "#E8EAED"
-FAINT = "#7D8388"
-ACCENT = "#8AB4F8"
-CHECKED_ROW = "#263347"
+# The colours as Android wants them, worked out once: rows are redrawn
+# constantly while a list scrolls.
+TEXT = Color.parseColor(palette.TEXT)
+FAINT = Color.parseColor(palette.FAINT)
+ACCENT = Color.parseColor(palette.ACCENT)
+CHECKED_ROW = Color.parseColor(palette.CHECKED_ROW)
 
 
 class _Adapter(dynamic_proxy(ListAdapter)):
@@ -139,7 +141,7 @@ class FileList:
         self.thumbs = Thumbnails(loop, self.picture_arrived)
 
         context = androidui.activity()
-        holder.setBackgroundColor(Color.parseColor(PANEL))
+        holder.setBackgroundColor(Color.parseColor(palette.PANEL))
         self.press = _Press(self)
 
         self.list = ListView(context)
@@ -164,19 +166,19 @@ class FileList:
         holder.addView(self.grid, RelativeLayoutParams(FILL, FILL))
 
         self.note = TextView(context)
-        self.note.setTextColor(Color.parseColor(FAINT))
+        self.note.setTextColor(FAINT)
         self.note.setGravity(Gravity.CENTER)
         self.note.setPadding(androidui.dp(16), 0, androidui.dp(16), 0)
         holder.addView(self.note, RelativeLayoutParams(FILL, FILL))
 
         self.counter = TextView(context)
-        self.counter.setTextColor(Color.parseColor("#0B1B33"))
+        self.counter.setTextColor(Color.parseColor(palette.ON_ACCENT))
         self.counter.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13)
         self.counter.setPadding(
             androidui.dp(12), androidui.dp(5), androidui.dp(12), androidui.dp(5)
         )
         pill = GradientDrawable()
-        pill.setColor(Color.parseColor(ACCENT))
+        pill.setColor(ACCENT)
         pill.setCornerRadius(androidui.dp(16))
         self.counter.setBackground(pill)
         corner = RelativeLayoutParams(WRAP, WRAP)
@@ -226,10 +228,9 @@ class FileList:
         self.adapter.changed()
         self.view.setSelection(0)
 
-    def update(self, rows: list | None = None) -> None:
+    def update(self, rows: list) -> None:
         """The same folder, changed: rows added, or marks moved."""
-        if rows is not None:
-            self.rows = list(rows)
+        self.rows = list(rows)
         self.adapter.changed()
 
     def seed(self, doc_id: str, picture: Image.Image) -> None:
@@ -261,13 +262,17 @@ class FileList:
             self.fill_row(row, self.rows[position])
             return row
         except Exception:
-            # Android asked for a view and must be given one.
+            # Android asked for a view and must be given one. A fresh, empty
+            # one of the right kind, so that it can be filled next time round.
             self.log.exception("drawing an entry of the list")
-            return convert if convert is not None else View(androidui.activity())
+            return self.new_tile() if tiles else self.new_row()
 
-    def picture_for(self, entry, picture, icon_colour: str) -> None:
-        """A photo's thumbnail if there is one, or else an icon for what the
-        entry is."""
+    def describe(self, entry, name, picture) -> bool:
+        """Put an entry's name and picture into a row or a tile. Returns
+        whether it is checked."""
+        name.setText(entry.name)
+        name.setTextColor(TEXT if entry.is_dir or entry.is_photo else FAINT)
+
         thumbnail = self.thumbs.get(entry.doc_id) if entry.is_photo else None
         if thumbnail is not None:
             picture.setScaleType(ScaleType.CENTER_CROP)
@@ -276,8 +281,9 @@ class FileList:
             kind = "folder" if entry.is_dir else "photo" if entry.is_photo else "file"
             picture.setScaleType(ScaleType.CENTER_INSIDE)
             picture.setImageBitmap(
-                self.icon(kind, TEXT if entry.is_dir else icon_colour)
+                self.icon(kind, palette.TEXT if entry.is_dir else palette.FAINT)
             )
+        return entry.doc_id in self.checked
 
     def new_row(self):
         context = androidui.activity()
@@ -313,36 +319,30 @@ class FileList:
         picture = cast(ImageView, row.getChildAt(1))
         name = cast(TextView, row.getChildAt(2))
 
-        name.setText(entry.name)
-        usable = entry.is_dir or entry.is_photo
-        name.setTextColor(Color.parseColor(TEXT if usable else FAINT))
-        self.picture_for(entry, picture, FAINT)
-
-        checked = entry.doc_id in self.checked
+        checked = self.describe(entry, name, picture)
         if self.selectable and entry.is_photo:
             mark.setVisibility(View.VISIBLE)
             mark.setImageBitmap(
-                self.icon("checked", ACCENT) if checked else self.icon("unchecked", FAINT)
+                self.icon("checked", palette.ACCENT) if checked
+                else self.icon("unchecked", palette.FAINT)
             )
         else:
             # Where photos can be chosen, other rows keep the space, so that
             # every picture and name lines up.
             mark.setVisibility(View.INVISIBLE if self.selectable else View.GONE)
-        row.setBackgroundColor(
-            Color.parseColor(CHECKED_ROW) if checked else Color.TRANSPARENT
-        )
+        row.setBackgroundColor(CHECKED_ROW if checked else Color.TRANSPARENT)
 
     def new_tile(self):
         context = androidui.activity()
         tile = LinearLayout(context)
         tile.setOrientation(LinearLayout.VERTICAL)
-        edge = androidui.dp(3)
+        edge = androidui.dp(TILE_EDGE_DP)
         tile.setPadding(edge, edge, edge, edge)
         tile.setLayoutParams(AbsListLayout(FILL, WRAP))
 
         frame = FrameLayout(context)
-        frame.setBackgroundColor(Color.parseColor(TILE))
-        tile.addView(frame, LinearLayoutParams(FILL, androidui.dp(150)))
+        frame.setBackgroundColor(Color.parseColor(palette.TILE))
+        tile.addView(frame, LinearLayoutParams(FILL, androidui.dp(TILE_UNMEASURED_DP)))
 
         picture = ImageView(context)
         frame.addView(picture, FrameLayoutParams(FILL, FILL))
@@ -351,7 +351,7 @@ class FileList:
         # A dark disc behind the mark, so it shows on a pale photo.
         disc = GradientDrawable()
         disc.setShape(GradientDrawable.OVAL)
-        disc.setColor(Color.parseColor("#99000000"))
+        disc.setColor(Color.parseColor(palette.SCRIM))
         mark.setBackground(disc)
         inset = androidui.dp(2)
         mark.setPadding(inset, inset, inset, inset)
@@ -377,8 +377,8 @@ class FileList:
             gap = androidui.dp(TILE_GAP_DP)
             column = (self.grid.getWidth() - gap * (COLUMNS + 1)) // COLUMNS
         if column <= 0:
-            column = androidui.dp(150)
-        return column - 2 * androidui.dp(3)
+            column = androidui.dp(TILE_UNMEASURED_DP)
+        return column - 2 * androidui.dp(TILE_EDGE_DP)
 
     def fill_tile(self, tile, entry) -> None:
         frame = cast(FrameLayout, tile.getChildAt(0))
@@ -392,22 +392,16 @@ class FileList:
             shape.height = side
             frame.setLayoutParams(shape)
 
-        name.setText(entry.name)
-        usable = entry.is_dir or entry.is_photo
-        name.setTextColor(Color.parseColor(TEXT if usable else FAINT))
-        self.picture_for(entry, picture, FAINT)
-
-        checked = entry.doc_id in self.checked
+        checked = self.describe(entry, name, picture)
         if self.selectable and entry.is_photo:
             mark.setVisibility(View.VISIBLE)
             mark.setImageBitmap(
-                self.icon("checked", ACCENT) if checked else self.icon("unchecked", TEXT)
+                self.icon("checked", palette.ACCENT) if checked
+                else self.icon("unchecked", palette.TEXT)
             )
         else:
             mark.setVisibility(View.GONE)
-        tile.setBackgroundColor(
-            Color.parseColor(ACCENT) if checked else Color.TRANSPARENT
-        )
+        tile.setBackgroundColor(ACCENT if checked else Color.TRANSPARENT)
 
     def pressed(self, position: int) -> None:
         try:

@@ -1,8 +1,14 @@
 """The parts of the screen the toolkit has no word for.
 
 Icons beside button labels, a pop-up that asks for a name, the brief message
-at the bottom of the screen, and the phone's own Back gesture. Each is done
-the way Android apps ordinarily do it, by speaking to Android directly.
+at the bottom of the screen, a line of text that keeps its end in view, a
+handle to drag, an outline for an opened menu; and what the phone tells the
+app: its Back gesture, being returned to, what it is. Each is done the way
+Android apps ordinarily do it, by speaking to Android directly.
+
+Everything the two screens need from Android beyond storage, images and the
+file list is here, behind a name that says what it is for. That list of
+names is what a version for another kind of phone would have to supply.
 
 This module only imports on Android.
 """
@@ -14,6 +20,8 @@ import io
 from java import dynamic_proxy, jclass
 from org.beeware.android import MainActivity
 from PIL import Image
+
+from . import palette
 
 AlertDialog = jclass("android.app.AlertDialog")
 BitmapDrawable = jclass("android.graphics.drawable.BitmapDrawable")
@@ -45,19 +53,30 @@ def activity():
     return MainActivity.singletonThis
 
 
+_density: float | None = None
+
+
 def dp(value: float) -> int:
     """Density-independent units to this screen's pixels."""
-    density = activity().getResources().getDisplayMetrics().density
-    return int(round(value * density))
+    global _density
+    if _density is None:
+        # Asked once: it is the same every time, and this is called for
+        # every row of a list as it scrolls.
+        _density = float(activity().getResources().getDisplayMetrics().density)
+    return int(round(value * _density))
+
+
+def bitmap(image: Image.Image):
+    """A picture Android can put in a view."""
+    data = io.BytesIO()
+    image.save(data, "PNG")
+    raw = data.getvalue()
+    return BitmapFactory.decodeByteArray(raw, 0, len(raw))
 
 
 def drawable(image: Image.Image, size_dp: float):
     """An icon Android can draw, `size_dp` across."""
-    data = io.BytesIO()
-    image.save(data, "PNG")
-    raw = data.getvalue()
-    bitmap = BitmapFactory.decodeByteArray(raw, 0, len(raw))
-    picture = BitmapDrawable(activity().getResources(), bitmap)
+    picture = BitmapDrawable(activity().getResources(), bitmap(image))
     side = dp(size_dp)
     # An icon taller than the text beside it makes Android grow the line
     # upwards to hold it, which leaves the words sitting low. So the icon
@@ -109,21 +128,6 @@ def label(native, text: str, icon=None, after: bool = False) -> None:
     native.setText(content)
 
 
-def bitmap(image: Image.Image):
-    """A picture Android can put in a view."""
-    data = io.BytesIO()
-    image.save(data, "PNG")
-    raw = data.getvalue()
-    return BitmapFactory.decodeByteArray(raw, 0, len(raw))
-
-
-def align_start(native) -> None:
-    """For rows in a list: text at the leading edge, on one line."""
-    native.setGravity(Gravity.START | Gravity.CENTER_VERTICAL)
-    native.setSingleLine(True)
-    native.setEllipsize(TruncateAt.END)
-
-
 def toast(text: str) -> None:
     """A brief message at the bottom of the screen that needs no answer."""
     Toast.makeText(activity(), text, Toast.LENGTH_LONG).show()
@@ -169,10 +173,6 @@ def ask_for_text(title: str, hint: str, confirm: str, on_confirm):
     return dialog, field
 
 
-def press_confirm(dialog) -> None:
-    dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
-
-
 class BackButton:
     """Lets a screen answer the phone's Back gesture itself.
 
@@ -214,7 +214,7 @@ class BackButton:
         self.listening = on
 
 
-# --- pieces of the main screen -------------------------------------------------
+# --- pieces of the two screens -------------------------------------------------
 
 Color = jclass("android.graphics.Color")
 GradientDrawable = jclass("android.graphics.drawable.GradientDrawable")
@@ -246,6 +246,15 @@ def end_showing_text(holder, colour: str, size_sp: float):
     text.setTextSize(TypedValue.COMPLEX_UNIT_SP, size_sp)
     holder.addView(text, RelativeLayoutParams(_FILL, _FILL))
     return text
+
+
+def set_text(view, text: str) -> None:
+    view.setText(text)
+
+
+def height(native) -> int:
+    """How tall a piece of the screen is at the moment, in its pixels."""
+    return int(native.getHeight())
 
 
 class _Drag(dynamic_proxy(View.OnTouchListener)):
@@ -281,7 +290,7 @@ def drag_handle(holder, on_start, on_move, on_end, on_error):
     """
     grip = View(activity())
     bar = GradientDrawable()
-    bar.setColor(Color.parseColor("#80868B"))
+    bar.setColor(Color.parseColor(palette.GRIP))
     bar.setCornerRadius(dp(2))
     grip.setBackground(bar)
     middle = RelativeLayoutParams(dp(44), dp(4))
@@ -300,7 +309,7 @@ def outline_dropdown(spinner, colour: str) -> None:
     lettering as whatever lies beside it, so the two run together.
     """
     panel = GradientDrawable()
-    panel.setColor(Color.parseColor("#2E3035"))
+    panel.setColor(Color.parseColor(palette.MENU))
     panel.setStroke(dp(1.5), Color.parseColor(colour))
     panel.setCornerRadius(dp(8))
     spinner.setPopupBackgroundDrawable(panel)
@@ -311,12 +320,16 @@ class Returns:
     """Tells the app when it has been come back to, from another app or from
     the home screen. What was on screen may be out of date by then."""
 
-    def __init__(self, action) -> None:
+    def __init__(self, action, on_error) -> None:
         interface = jclass("android.app.Application$ActivityLifecycleCallbacks")
 
         class Callbacks(dynamic_proxy(interface)):
             def onActivityResumed(self, activity_) -> None:
-                action()
+                try:
+                    action()
+                except Exception:
+                    # Android is the caller: nothing may escape back to it.
+                    on_error()
 
             # The rest of what Android reports is of no interest here, but
             # every one has to be answered.
@@ -345,10 +358,27 @@ class Returns:
         activity().registerActivityLifecycleCallbacks(self.callbacks)
 
 
-def press_back() -> None:
-    """Press the phone's Back key, as far as this app's own windows go.
+# --- what the phone says about itself ------------------------------------------
 
-    For the build's own check, to close a menu it has opened. Must not be
-    called from the screen's thread.
-    """
-    jclass("android.app.Instrumentation")().sendKeyDownUpSync(4)
+def darken_system_bars() -> None:
+    """The strips above and below the app, which the theme leaves light."""
+    window = activity().getWindow()
+    window.setStatusBarColor(Color.BLACK)
+    window.setNavigationBarColor(Color.BLACK)
+
+
+def launched_with(flag: str) -> bool:
+    """Whether the app was started with a named switch set, as the build's
+    own check starts it."""
+    try:
+        return bool(activity().getIntent().getBooleanExtra(flag, False))
+    except Exception:
+        return False
+
+
+def device() -> list[str]:
+    """What the phone is, for the head of the log."""
+    return [
+        f"Android {Build.VERSION.RELEASE} (API {Build.VERSION.SDK_INT})",
+        f"Model: {Build.MANUFACTURER} {Build.MODEL}",
+    ]

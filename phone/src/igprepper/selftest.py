@@ -7,6 +7,13 @@ is not published.
 
 None of this is reachable from the app's screens. It starts only when the
 app is launched with a flag that the build passes.
+
+It speaks to Android freely, to press things and to look at what Android has
+on screen, and is the one place outside the Android modules that does. The
+means of doing so that nothing else needs are kept here, not there: synthetic
+touches, the Back key, and reading the storage app's permissions.
+
+This module only imports on Android.
 """
 
 from __future__ import annotations
@@ -18,6 +25,7 @@ import os
 import time
 from datetime import datetime
 
+from java import jarray, jclass
 from PIL import Image
 
 from igprep.core import geometry as g
@@ -34,6 +42,75 @@ MANY = 150
 SMALL_PHOTO = "igprepper-test-photo.jpg"
 LARGE_PHOTO = "igprepper-test-photo-large.jpg"
 TEXT_FILE = "igprepper-test-small.txt"
+
+
+InputDevice = jclass("android.view.InputDevice")
+MotionEvent = jclass("android.view.MotionEvent")
+PointerCoords = jclass("android.view.MotionEvent$PointerCoords")
+PointerProperties = jclass("android.view.MotionEvent$PointerProperties")
+SystemClock = jclass("android.os.SystemClock")
+
+# What a storage app may or may not allow, by Android's own flag values
+# (DocumentsContract.Document.FLAG_*), in the order worth reading. The two
+# lists differ because Android's "write" flag only ever applies to files;
+# reporting it as refused for a folder would read as a problem when it is not.
+_SHARED_CAPABILITIES = (("rename", 64), ("move", 256), ("copy", 128), ("delete", 4))
+_FOLDER_CAPABILITIES = (("create items inside", 8),) + _SHARED_CAPABILITIES
+_FILE_CAPABILITIES = (("overwrite", 2),) + _SHARED_CAPABILITIES
+
+
+def local_folder(path: str):
+    """Address of a folder on the phone's own storage, e.g. "Download/IGprepper",
+    to point the picker somewhere predictable."""
+    return storage.DocumentsContract.buildDocumentUri(
+        storage.LOCAL_STORAGE, f"primary:{path}"
+    )
+
+
+def read_file(tree, doc_id: str) -> bytes:
+    return storage.read_uri(storage.document_uri(tree, doc_id))
+
+
+def uptime() -> int:
+    return SystemClock.uptimeMillis()
+
+
+def send_touch(view, action: int, points, down_time: int) -> None:
+    """Hand the view a touch as Android would, with any number of fingers."""
+    properties, coords = [], []
+    for number, (x, y) in enumerate(points):
+        prop = PointerProperties()
+        prop.id = number
+        prop.toolType = MotionEvent.TOOL_TYPE_FINGER
+        properties.append(prop)
+        coord = PointerCoords()
+        coord.x, coord.y = float(x), float(y)
+        coord.pressure, coord.size = 1.0, 1.0
+        coords.append(coord)
+    event = MotionEvent.obtain(
+        down_time, uptime(), action, len(points),
+        jarray(PointerProperties)(properties), jarray(PointerCoords)(coords),
+        0, 0, 1.0, 1.0, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0,
+    )
+    try:
+        view.dispatchTouchEvent(event)
+    finally:
+        event.recycle()
+
+
+def second_finger(action: int) -> int:
+    """`action`, said of the second finger rather than the first."""
+    return action | (1 << MotionEvent.ACTION_POINTER_INDEX_SHIFT)
+
+
+def press_confirm(dialog) -> None:
+    dialog.getButton(androidui.DialogInterface.BUTTON_POSITIVE).performClick()
+
+
+def press_back() -> None:
+    """Press the phone's Back key, as far as this app's own windows go, to
+    close a menu. Must not be called from the screen's thread."""
+    jclass("android.app.Instrumentation")().sendKeyDownUpSync(4)
 
 
 def verdict(app, ok: bool, text: str) -> None:
@@ -107,7 +184,7 @@ async def run(app) -> None:
             # The first thing asked for, and the emulator's camera may not be
             # ready yet.
             await hold(app, "home-first-run", 30)
-        await app.target.choose(initial=storage.local_folder_uri(FOLDER))
+        await app.target.choose(initial=local_folder(FOLDER))
         if app.target.tree is None:
             log.write("FAIL  No folder was granted, so nothing else can be tested.")
             return
@@ -156,7 +233,7 @@ async def output_side(app) -> None:
     dialog, field = target.name_dialog
     field.setText("Edits")
     await hold(app, "new-folder")
-    androidui.press_confirm(dialog)
+    press_confirm(dialog)
     made = await until(lambda: "Edits" in names(target) and not app.busy)
     verdict(app, made, "Typing a name and pressing Create made the folder.")
 
@@ -165,7 +242,8 @@ async def output_side(app) -> None:
 
 
 def capabilities(log, entry) -> None:
-    found = entry.capabilities()
+    table = _FOLDER_CAPABILITIES if entry.is_dir else _FILE_CAPABILITIES
+    found = {label: bool(entry.flags & bit) for label, bit in table}
     allowed = [name for name, yes in found.items() if yes]
     refused = [name for name, yes in found.items() if not yes]
     kind = "this folder" if entry.is_dir else "a file created here"
@@ -205,7 +283,7 @@ def write_test_files(log, tree, parent: str) -> None:
         payload = f"IGprepper test file, written {stamp}\n".encode()
         entry = storage.create_file(tree, parent, TEXT_FILE, "text/plain")
         storage.write_bytes(tree, entry.doc_id, payload)
-        back = storage.read_bytes(tree, entry.doc_id)
+        back = read_file(tree, entry.doc_id)
         ok = back == payload
         log.write(
             f"{'PASS' if ok else 'FAIL'}  Small file {entry.name!r}: wrote "
@@ -245,7 +323,7 @@ def write_test_files(log, tree, parent: str) -> None:
         started = time.perf_counter()
         storage.write_bytes(tree, entry.doc_id, blob)
         written = time.perf_counter()
-        back = storage.read_bytes(tree, entry.doc_id)
+        back = read_file(tree, entry.doc_id)
         finished = time.perf_counter()
         ok = hashlib.sha256(back).digest() == hashlib.sha256(blob).digest()
         log.write(
@@ -263,7 +341,7 @@ def write_test_files(log, tree, parent: str) -> None:
 async def input_side(app) -> None:
     log, source, target = app.log, app.source, app.target
     log.section("Self-test: the input folder")
-    await source.choose(initial=storage.local_folder_uri(FOLDER))
+    await source.choose(initial=local_folder(FOLDER))
     if source.tree is None:
         log.write("FAIL  No input folder was granted.")
         return
@@ -327,8 +405,8 @@ async def input_side(app) -> None:
     verdict(
         app, not source.checked and "not a photo" in app.said
         and not is_on(app.process_btn),
-        "Pressing a text file checked nothing, said why, and left Process "
-        "switched off.",
+        "Pressing a text file checked nothing, said why, and left the Frame "
+        "button switched off.",
     )
 
     press_row(source, SMALL_PHOTO)
@@ -338,7 +416,7 @@ async def input_side(app) -> None:
         app, len(source.checked) == 2 and counter == "2 selected"
         and is_on(app.process_btn),
         f"Pressing two photos checked both: the corner reads {counter!r} and "
-        "Process is available.",
+        "the Frame button is available.",
     )
 
     photos = [e for e in source.entries if e.name in (SMALL_PHOTO, LARGE_PHOTO)]
@@ -402,7 +480,7 @@ async def input_side(app) -> None:
     verdict(
         app, not source.checked and not is_on(app.process_btn)
         and str(source.files.counter.getText()) == "",
-        "Going up a folder cleared the checks and switched Process off.",
+        "Going up a folder cleared the checks and switched the Frame button off.",
     )
     await enter(app, source, "Edits")
     press_row(source, SMALL_PHOTO)
@@ -453,7 +531,7 @@ async def editor(app) -> None:
         lambda: app.main_window.content is app.editor_box and not app.busy
     )
     if not opened:
-        log.write("FAIL  Pressing Process did not open the editor.")
+        log.write("FAIL  Pressing the Frame button did not open the editor.")
         return
     verdict(
         app, len(app.picked) == 2 and app.count_label.text == "1 of 2"
@@ -526,7 +604,7 @@ async def editor(app) -> None:
         "looking at the same folder, shows them too.",
     )
     for entry in new:
-        data = await app.work(storage.read_bytes, target.tree, entry.doc_id)
+        data = await app.work(read_file, target.tree, entry.doc_id)
         with Image.open(io.BytesIO(data)) as saved:
             verdict(
                 app, saved.size == (1080, 1080),
@@ -596,7 +674,6 @@ async def fingers(app) -> None:
     them, and see that it follows."""
     log = app.log
     log.section("Self-test: dragging and pinching")
-    from android.view import MotionEvent
 
     # A square frame: whichever way the photo lies, it has room to slide.
     choose(app.ratio_select, app.ratio_choices, "1:1")
@@ -615,14 +692,14 @@ async def fingers(app) -> None:
     )
 
     async def touches(*moments) -> None:
-        began = touch.now()
+        began = uptime()
         for action, points in moments:
-            touch.send(view, action, points, began)
+            send_touch(view, action, points, began)
             await asyncio.sleep(0.05)
 
     def pinch(start: float, end: float):
         """Two fingers either side of the centre, from `start` apart to `end`."""
-        second = touch.second_finger
+        second = second_finger
 
         def pair(apart: float):
             return [(centre_x - apart / 2, centre_y), (centre_x + apart / 2, centre_y)]
@@ -727,7 +804,7 @@ async def leaving(app) -> None:
         lambda: app.main_window.content is app.editor_box and not app.busy
     )
     if not opened:
-        log.write("FAIL  Pressing Process did not open the editor.")
+        log.write("FAIL  Pressing the Frame button did not open the editor.")
         return
     verdict(
         app, app.count_label.text == "1 of 1"
@@ -742,7 +819,7 @@ async def leaving(app) -> None:
     app.fit_select._impl.native.performClick()
     await hold(app, "editor-menu")
     try:
-        await app.work(androidui.press_back)
+        await app.work(press_back)
         await asyncio.sleep(0.5)
     except Exception as problem:
         log.write(f"INFO  The menu could not be closed by the Back key: {problem!r}")
@@ -838,21 +915,20 @@ async def divider(app) -> None:
     """Drag the divider between the lists, and try to drag it too far."""
     log = app.log
     log.section("Self-test: the divider")
-    from android.view import MotionEvent
 
     handle = app.divider._impl.native
     least = androidui.dp(LEAST_LIST_DP)
     across = handle.getWidth() / 2
 
     async def drag(down: float) -> tuple[int, int]:
-        began = touch.now()
-        touch.send(handle, MotionEvent.ACTION_DOWN, [(across, 10)], began)
+        began = uptime()
+        send_touch(handle, MotionEvent.ACTION_DOWN, [(across, 10)], began)
         for n in range(1, 5):
-            touch.send(
+            send_touch(
                 handle, MotionEvent.ACTION_MOVE, [(across, 10 + down * n / 4)], began
             )
             await asyncio.sleep(0.05)
-        touch.send(handle, MotionEvent.ACTION_UP, [(across, 10 + down)], began)
+        send_touch(handle, MotionEvent.ACTION_UP, [(across, 10 + down)], began)
         await asyncio.sleep(0.7)
         return app.list_heights()
 

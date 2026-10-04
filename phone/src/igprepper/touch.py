@@ -10,18 +10,14 @@ This module only imports on Android.
 from __future__ import annotations
 
 from android.view import View
-from java import dynamic_proxy, jarray, jclass
+from java import dynamic_proxy, jclass
 from PIL import Image
 
 Bitmap = jclass("android.graphics.Bitmap")
 BitmapConfig = jclass("android.graphics.Bitmap$Config")
 ByteBuffer = jclass("java.nio.ByteBuffer")
-InputDevice = jclass("android.view.InputDevice")
 MotionEvent = jclass("android.view.MotionEvent")
-PointerCoords = jclass("android.view.MotionEvent$PointerCoords")
-PointerProperties = jclass("android.view.MotionEvent$PointerProperties")
 RectF = jclass("android.graphics.RectF")
-SystemClock = jclass("android.os.SystemClock")
 
 CHANGED, MOVED, ENDED = "changed", "moved", "ended"
 _KINDS = {
@@ -64,6 +60,14 @@ class Listener(dynamic_proxy(View.OnTouchListener)):
         return True
 
 
+def listen(view, handler, on_error) -> Listener:
+    """Have `handler(kind, points)` called for fingers on `view`. Returns the
+    listener, which the caller must keep hold of for as long as it matters."""
+    listener = Listener(handler, on_error)
+    view.setOnTouchListener(listener)
+    return listener
+
+
 def shown_at(view) -> tuple[float, float, float]:
     """Where the picture sits inside its view: centre x, centre y, width.
 
@@ -102,37 +106,3 @@ class Canvas:
         pixels = image.convert("RGBA").tobytes()
         self.bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
         view.setImageBitmap(self.bitmap)
-
-
-# --- for the build's own check -------------------------------------------------
-
-def send(view, action: int, points, down_time: int) -> None:
-    """Hand the view a touch as Android would, with any number of fingers."""
-    properties, coords = [], []
-    for number, (x, y) in enumerate(points):
-        prop = PointerProperties()
-        prop.id = number
-        prop.toolType = MotionEvent.TOOL_TYPE_FINGER
-        properties.append(prop)
-        coord = PointerCoords()
-        coord.x, coord.y = float(x), float(y)
-        coord.pressure, coord.size = 1.0, 1.0
-        coords.append(coord)
-    event = MotionEvent.obtain(
-        down_time, SystemClock.uptimeMillis(), action, len(points),
-        jarray(PointerProperties)(properties), jarray(PointerCoords)(coords),
-        0, 0, 1.0, 1.0, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0,
-    )
-    try:
-        view.dispatchTouchEvent(event)
-    finally:
-        event.recycle()
-
-
-def second_finger(action: int) -> int:
-    """`action`, said of the second finger rather than the first."""
-    return action | (1 << MotionEvent.ACTION_POINTER_INDEX_SHIFT)
-
-
-def now() -> int:
-    return SystemClock.uptimeMillis()

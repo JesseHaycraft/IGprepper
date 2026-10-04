@@ -31,7 +31,8 @@ from toga.style import Pack
 from toga.style.pack import CENTER, COLUMN, ROW
 
 from igprep.core import geometry as g
-from igprep.core.preview import make_proxy
+from igprep.core.preview import PROXY_MAX
+from igprep.core.render import RESAMPLE
 from igprep.core.settings import Framing
 
 from . import (
@@ -47,19 +48,11 @@ from . import (
     words,
 )
 from .browser import Browser
+from .palette import ACCENT, BUTTON_LOOKS, DIM
 from .phonelog import PhoneLog
 
-ACCENT = "#8AB4F8"
-DIM = "#9AA0A6"
-# Android draws a switched-off button almost exactly like a working one, so
-# each kind of button, and "off", is given colours of its own.
-BUTTON_LOOKS = {
-    "primary": {"color": "#0B1B33", "background_color": ACCENT},
-    "plain": {"color": "#FFFFFF", "background_color": "#3C4043"},
-    "row": {"color": "#E8EAED", "background_color": "#2A2B2E"},
-    "off": {"color": "#6F7378", "background_color": "#232427"},
-}
-ICON_DP = 20
+ICON_DP = 20   # how large an icon is drawn beside a button's label
+ICON_PX = 96   # how large it is made, which is larger: it is shrunk to fit
 
 FIT_CHOICES = {
     "Fit – show the whole photo": "fit",
@@ -68,13 +61,23 @@ FIT_CHOICES = {
 # How long the guide lines stay after the last press of a rotation button.
 GUIDE_SECONDS = 3
 KEPT_LOGS = 10
-# The frame's width when the editor opens, as a percentage of the picture's.
-BORDER_PCT = 3.0
 # The divider can be dragged until this much of a list is left, and no
 # further: enough to see that it is there, and to drag it back.
 LEAST_LIST_DP = 28
 # Coming back to the app re-reads the folders, but not more often than this.
 REREAD_SECONDS = 2.0
+
+
+@dataclass
+class Held:
+    """Where the preview is on screen and what it is showing, for as long
+    as fingers are on it. None of it changes while they are."""
+
+    centre_x: float
+    centre_y: float
+    scale: float  # screen pixels to pixels of the finished picture
+    framing: Framing
+    box: tuple[int, int]
 
 
 @dataclass
@@ -111,6 +114,8 @@ class IGprepper(toga.App):
         self.placements: dict[int, g.Placement] = {}
         self.preview_plain: Image.Image | None = None
         self.tracker = gestures.Tracker()
+        # What a drag is measured against, worked out when fingers land.
+        self.held: Held | None = None
         self.dragging = False
         self.redraw_pending = False
         self.quick_frames, self.quick_seconds = 0, 0.0
@@ -135,7 +140,7 @@ class IGprepper(toga.App):
         self.main_window.show()
 
         self.guard("describing the phone", self.report_environment)
-        self.guard("darkening the system bars", self.darken_system_bars)
+        self.guard("darkening the system bars", androidui.darken_system_bars)
         self.guard("watching for the app being returned to", self.watch_returns)
         self.refresh_controls()
 
@@ -189,7 +194,7 @@ class IGprepper(toga.App):
     def list_heights(self) -> tuple[int, int]:
         """How tall each list is on screen at the moment, in its pixels."""
         return tuple(
-            int(browser.holder._impl.native.getHeight()) for browser in self.browsers
+            androidui.height(browser.holder._impl.native) for browser in self.browsers
         )
 
     def apply_split(self, share: float) -> None:
@@ -199,6 +204,7 @@ class IGprepper(toga.App):
 
     def split_started(self) -> None:
         self.split_from = self.list_heights()
+        self.split_to = None
 
     def split_moved(self, down: float) -> None:
         if self.split_from is None:
@@ -227,7 +233,9 @@ class IGprepper(toga.App):
     # --- coming back to the app ---------------------------------------------------
 
     def watch_returns(self) -> None:
-        self.returns = androidui.Returns(self.returned)
+        self.returns = androidui.Returns(
+            self.returned, lambda: self.log.exception("noticing a return to the app")
+        )
 
     def returned(self) -> None:
         """The app is on screen again. Files may have arrived, gone, or
@@ -247,6 +255,8 @@ class IGprepper(toga.App):
             await browser.reload(ask_again=True)
         except Exception:
             self.log.exception(f"re-reading the {browser.side} folder")
+
+    # --- the editor, and moving between the two screens --------------------------
 
     def build_editor(self) -> None:
         """The photo on top, everything that changes it beneath."""
@@ -309,7 +319,7 @@ class IGprepper(toga.App):
         )
         self.border_value = toga.Label("", style=Pack(width=44))
         self.border_slider = toga.Slider(
-            min=0, max=15, value=BORDER_PCT, tick_count=31,
+            min=0, max=15, value=g.DEFAULT_BORDER_PCT, tick_count=31,
             on_change=self.update_preview, style=Pack(flex=1),
         )
 
@@ -363,7 +373,7 @@ class IGprepper(toga.App):
         self.guard("clearing out old logs", lambda: self.log.prune(KEPT_LOGS))
         self.log.write("")
         self.log.write("=== Ready ===")
-        if self.self_test_requested():
+        if androidui.launched_with("selftest"):
             from . import selftest
 
             await selftest.run(self)
@@ -379,14 +389,6 @@ class IGprepper(toga.App):
     async def work(self, function, *args):
         """Run something slow off the screen's thread."""
         return await asyncio.get_running_loop().run_in_executor(None, function, *args)
-
-    def darken_system_bars(self) -> None:
-        """The strips above and below the app, which the theme leaves light."""
-        from android.graphics import Color
-
-        window = androidui.activity().getWindow()
-        window.setStatusBarColor(Color.BLACK)
-        window.setNavigationBarColor(Color.BLACK)
 
     async def exclusively(self, doing: str, coroutine) -> None:
         """Run one action at a time, and never let it fail silently."""
@@ -411,22 +413,13 @@ class IGprepper(toga.App):
                 "Download/IGprepper.",
             )
 
-    def self_test_requested(self) -> bool:
-        try:
-            intent = androidui.activity().getIntent()
-            return bool(intent.getBooleanExtra("selftest", False))
-        except Exception:
-            return False
-
     def report_environment(self) -> None:
         log = self.log
         log.section(f"IGprepper phone app, version {self.version}")
         log.write(f"Log file: {log.location}")
 
-        from android.os import Build
-
-        log.write(f"Android {Build.VERSION.RELEASE} (API {Build.VERSION.SDK_INT})")
-        log.write(f"Model: {Build.MANUFACTURER} {Build.MODEL}")
+        for line in androidui.device():
+            log.write(line)
         log.write(f"Python {sys.version.split()[0]} on {platform.machine()}")
         log.write(
             "The Back gesture inside the editor: "
@@ -480,7 +473,7 @@ class IGprepper(toga.App):
         key = (name, colour)
         if key not in self.drawn_icons:
             self.drawn_icons[key] = androidui.drawable(
-                icons.icon(name, 96, colour), ICON_DP
+                icons.icon(name, ICON_PX, colour), ICON_DP
             )
         return self.drawn_icons[key]
 
@@ -488,7 +481,9 @@ class IGprepper(toga.App):
         """An icon as a plain picture, for a row of a list."""
         key = (name, colour)
         if key not in self.icon_bitmaps:
-            self.icon_bitmaps[key] = androidui.bitmap(icons.icon(name, 96, colour))
+            self.icon_bitmaps[key] = androidui.bitmap(
+                icons.icon(name, ICON_PX, colour)
+            )
         return self.icon_bitmaps[key]
 
     def dress(self, button: toga.Button, on: bool) -> None:
@@ -519,6 +514,9 @@ class IGprepper(toga.App):
 
     def switch(self, button: toga.Button, on: bool) -> None:
         """Enable or disable a button, and make the difference visible."""
+        shown = self.looks[button].shown
+        if shown is not None and shown[0] == on:
+            return  # as it already is: most are, most of the time
         button.enabled = on
         self.dress(button, on)
 
@@ -611,10 +609,16 @@ class IGprepper(toga.App):
         await self.show_photo()
         self.show_editor()
 
-    def forget_photos(self) -> None:
+    def let_go(self) -> None:
+        """Drop whatever was in progress on the preview: guide lines, and
+        fingers part-way through a drag."""
         self.clear_guides()
         self.tracker.ended()
+        self.held = None
         self.dragging = False
+
+    def forget_photos(self) -> None:
+        self.let_go()
         self.picked, self.proxies, self.placements = [], {}, {}
         self.sizes, self.quick_proxies = {}, {}
         self.preview_plain = None
@@ -623,10 +627,17 @@ class IGprepper(toga.App):
     def load_proxy(self, address) -> tuple[Image.Image, tuple[int, int]]:
         data = storage.read_uri(address)
         image = framing.prepare(data, androidimage.decode_to_srgb)
-        return make_proxy(image), image.size
+        size = image.size
+        # Shrunk where it is. The full-size photo is not wanted again until
+        # saving, and a copy of it is a great deal of memory.
+        image.thumbnail((PROXY_MAX, PROXY_MAX), RESAMPLE)
+        return image, size
 
-    async def show_photo(self) -> None:
-        index = self.preview_index
+    async def show_photo(self, index: int | None = None) -> None:
+        """Show one of the photos: the one given, or the one already showing.
+        It becomes the one showing only once it has been opened, so a photo
+        that will not open leaves the screen on the one before."""
+        index = self.preview_index if index is None else index
         if index not in self.proxies:
             started = time.perf_counter()
             proxy, size = await self.work(self.load_proxy, self.picked[index][0])
@@ -636,9 +647,8 @@ class IGprepper(toga.App):
                 f"Photo {index + 1}: opened at {size[0]} x {size[1]} in "
                 f"{time.perf_counter() - started:.2f} s"
             )
-        self.clear_guides()
-        self.tracker.ended()
-        self.dragging = False
+        self.preview_index = index
+        self.let_go()
         self.update_preview()
 
     async def next_photo(self, widget=None) -> None:
@@ -648,8 +658,7 @@ class IGprepper(toga.App):
         await self.exclusively("showing the previous photo", self._step(-1))
 
     async def _step(self, by: int) -> None:
-        self.preview_index = (self.preview_index + by) % len(self.picked)
-        await self.show_photo()
+        await self.show_photo((self.preview_index + by) % len(self.picked))
 
     # --- the preview ------------------------------------------------------------------
 
@@ -664,12 +673,14 @@ class IGprepper(toga.App):
         else:
             self.placements[self.preview_index] = placement
 
-    def update_preview(self, widget=None) -> None:
+    def update_preview(self, widget=None, chosen: Framing | None = None) -> None:
+        """Redraw the preview properly. `chosen` is the framing, where the
+        caller has already read it from the controls."""
         proxy = self.proxies.get(self.preview_index)
         if proxy is None:
             return
         try:
-            chosen = self.current_framing()
+            chosen = chosen or self.current_framing()
             # A change of shape or border moves the zoom limit.
             self.place(
                 g.within_limits(
@@ -679,7 +690,7 @@ class IGprepper(toga.App):
             )
             self.describe(chosen)
             self.preview_plain = framing.preview(proxy, chosen, self.placement())
-            self.draw_preview()
+            self.draw_preview(chosen)
         except Exception:
             self.log.exception("drawing the preview")
 
@@ -698,12 +709,12 @@ class IGprepper(toga.App):
         )
         self.relabel(self.save_btn, "Save photo" if count == 1 else "Save photos")
 
-    def draw_preview(self) -> None:
+    def draw_preview(self, chosen: Framing | None = None) -> None:
         image = self.preview_plain
         if image is None:
             return
         if self.guides_showing:
-            image = framing.guided(image, self.current_framing())
+            image = framing.guided(image, chosen or self.current_framing())
         self.preview_view.image = toga.Image(image)
 
     # --- turning a photo ------------------------------------------------------
@@ -711,15 +722,15 @@ class IGprepper(toga.App):
     def rotate(self, degrees: int) -> None:
         if self.busy or self.preview_index not in self.proxies:
             return
+        chosen = self.current_framing()
         self.place(
             g.turned_further(
-                self.sizes[self.preview_index],
-                framing.output_box(self.current_framing()),
+                self.sizes[self.preview_index], framing.output_box(chosen),
                 self.placement(), degrees,
             )
         )
         self.show_guides()
-        self.update_preview()
+        self.update_preview(chosen=chosen)
 
     def recentre(self, widget=None) -> None:
         """Put the photo back as it was opened: level, centred, not zoomed."""
@@ -753,16 +764,29 @@ class IGprepper(toga.App):
 
     def listen_for_fingers(self) -> None:
         # Kept on the app so it is not swept away while Android still holds it.
-        self.finger_listener = touch.Listener(
-            self.on_fingers, lambda: self.log.exception("following a finger")
+        self.finger_listener = touch.listen(
+            self.preview_view._impl.native, self.on_fingers,
+            lambda: self.log.exception("following a finger"),
         )
-        self.preview_view._impl.native.setOnTouchListener(self.finger_listener)
         self.live = touch.Canvas()
+
+    def hold(self) -> Held:
+        centre_x, centre_y, shown_width = touch.shown_at(
+            self.preview_view._impl.native
+        )
+        chosen = self.current_framing()
+        return Held(
+            centre_x, centre_y, framing.OUTPUT_WIDTH / shown_width,
+            chosen, framing.output_box(chosen),
+        )
 
     def on_fingers(self, kind: str, points) -> None:
         if self.busy or self.preview_index not in self.proxies:
             return
         if kind == touch.CHANGED:
+            # Asked of Android and of the controls here, when fingers land or
+            # lift, and not again for each of the many moves in between.
+            self.held = self.hold()
             self.tracker.changed(points)
         elif kind == touch.MOVED:
             step = self.tracker.moved(points)
@@ -770,6 +794,7 @@ class IGprepper(toga.App):
                 self.drag(step)
         else:
             self.tracker.ended()
+            self.held = None
             if self.dragging:
                 # The fingers have gone: draw it properly.
                 self.dragging = False
@@ -777,20 +802,18 @@ class IGprepper(toga.App):
 
     def drag(self, step: gestures.Step) -> None:
         """Move the photo with the fingers."""
-        centre_x, centre_y, shown_width = touch.shown_at(
-            self.preview_view._impl.native
-        )
-        # Screen pixels to pixels of the finished picture, from its centre.
-        scale = framing.OUTPUT_WIDTH / shown_width
+        held = self.held = self.held or self.hold()
 
         def on_output(point):
-            return (point[0] - centre_x) * scale, (point[1] - centre_y) * scale
+            # Screen pixels to pixels of the finished picture, from its centre.
+            return (
+                (point[0] - held.centre_x) * held.scale,
+                (point[1] - held.centre_y) * held.scale,
+            )
 
         self.place(
             g.moved(
-                self.sizes[self.preview_index],
-                framing.output_box(self.current_framing()),
-                self.placement(),
+                self.sizes[self.preview_index], held.box, self.placement(),
                 before=on_output(step.before),
                 after=on_output(step.after),
                 spread=step.spread,
@@ -812,7 +835,7 @@ class IGprepper(toga.App):
             started = time.perf_counter()
             if index not in self.quick_proxies:
                 self.quick_proxies[index] = framing.quick_proxy(self.proxies[index])
-            chosen = self.current_framing()
+            chosen = self.held.framing if self.held else self.current_framing()
             image = framing.quick_preview(
                 self.quick_proxies[index], chosen, self.placement()
             )
@@ -879,7 +902,12 @@ class IGprepper(toga.App):
                         "showing a saved photo",
                         lambda d=doc_id, p=picture: browser.files.seed(d, p),
                     )
-                await browser.reload()
+                try:
+                    await browser.reload()
+                except Exception:
+                    # The photos are saved whether or not the folder can be
+                    # read again; say so, and leave the list as it was.
+                    self.log.exception(f"re-reading the {browser.side} folder")
         if saved == total:
             self.announce(
                 words.saved(saved, folder, to_gallery),

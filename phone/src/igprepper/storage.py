@@ -139,14 +139,6 @@ def address(tree) -> str:
     return str(tree)
 
 
-def local_folder_uri(path: str):
-    """Address of a folder on the phone's own storage, e.g. "Download/IGprepper".
-
-    Only used to point the picker somewhere predictable during automated tests.
-    """
-    return DocumentsContract.buildDocumentUri(LOCAL_STORAGE, f"primary:{path}")
-
-
 # --- looking -----------------------------------------------------------------
 
 def root_id(tree) -> str:
@@ -158,14 +150,23 @@ def provider_name(tree) -> str:
     return str(tree.getAuthority())
 
 
+_labels: dict[str, str] = {}
+
+
 def provider_label(tree) -> str:
     """The storage app's name as its owner wrote it, such as "Drive"."""
-    try:
-        packages = MainActivity.singletonThis.getPackageManager()
-        provider = packages.resolveContentProvider(str(tree.getAuthority()), 0)
-        return "" if provider is None else str(provider.loadLabel(packages))
-    except Exception:
-        return ""
+    authority = str(tree.getAuthority())
+    if authority not in _labels:
+        try:
+            packages = MainActivity.singletonThis.getPackageManager()
+            provider = packages.resolveContentProvider(authority, 0)
+            label = "" if provider is None else str(provider.loadLabel(packages))
+        except Exception:
+            label = ""
+        # Asked once for each storage app: the path is redrawn on every
+        # move from folder to folder.
+        _labels[authority] = label
+    return _labels[authority]
 
 
 def where(tree, trail) -> str:
@@ -289,10 +290,6 @@ def _to_bytes(java_bytes, count: int) -> bytes:
         return bytes((b + 256) % 256 for b in list(java_bytes)[:count])
 
 
-def read_bytes(tree, doc_id: str) -> bytes:
-    return read_uri(_doc_uri(tree, doc_id))
-
-
 def read_uri(uri) -> bytes:
     stream = resolver().openInputStream(uri)
     if stream is None:
@@ -320,6 +317,8 @@ def save_to_gallery(name: str, jpeg: bytes) -> None:
     if uri is None:
         raise StorageError("Android refused to add the photo to the gallery")
     stream = resolver().openOutputStream(uri, "w")
+    if stream is None:
+        raise StorageError("Android would not open the gallery for writing")
     try:
         stream.write(jpeg)
         stream.flush()
