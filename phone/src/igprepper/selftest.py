@@ -113,6 +113,7 @@ async def run(app) -> None:
         await editor(app)
         await leaving(app)
         remembered(app)
+        await starting_again(app)
     except Exception:
         log.exception("running the self-test")
     finally:
@@ -702,3 +703,44 @@ def remembered(app) -> None:
         for b in app.browsers
     )
     verdict(app, held, "Access to both is recorded as lasting beyond this session.")
+
+
+async def starting_again(app) -> None:
+    """What the next launch will find, tried without waiting for one."""
+    log = app.log
+    log.section("Self-test: starting again")
+    was = {b.side: (storage.address(b.tree), list(b.trail)) for b in app.browsers}
+
+    def forget() -> None:
+        for browser in app.browsers:
+            browser.tree, browser.trail, browser.entries = None, [], []
+            browser.checked = set()
+
+    # As after closing the app: nothing in memory, the record on disk.
+    forget()
+    await app.restore_places()
+    verdict(
+        app,
+        all(
+            b.tree is not None and (storage.address(b.tree), b.trail) == was[b.side]
+            and b.entries
+            for b in app.browsers
+        ),
+        "From the record alone, both sides came back in the folders they were "
+        "in, with their files listed.",
+    )
+
+    # As an earlier version of the app left things: one folder it could write
+    # to, and no record. That folder was where framed photos went.
+    forget()
+    app.places_file().unlink()
+    await app.restore_places()
+    target, source = app.target, app.source
+    verdict(
+        app,
+        target.tree is not None and storage.address(target.tree) == was["output"][0]
+        and len(target.trail) == 1 and source.tree is None
+        and source.path_label.text == "No folder chosen",
+        "With no record, the one folder an earlier version held became the "
+        "output folder, and the input side asks for one.",
+    )
