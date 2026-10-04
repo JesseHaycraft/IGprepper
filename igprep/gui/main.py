@@ -120,7 +120,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(caption)
 
         bar = QHBoxLayout()
-        add = QPushButton("Add photos...")
+        self.add_btn = add = QPushButton("Add photos...")
         add.clicked.connect(self._add_photos)
         self.remove_btn = QPushButton("Remove")
         self.remove_btn.clicked.connect(lambda: self.queue.remove_selected())
@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(bar)
 
         self.queue = QueueTable()
+        self.queue.filesDropped.connect(self._add)
         self.queue.jobsChanged.connect(self._on_queue_changed)
         self.queue.selectionChangedJob.connect(self._on_selection_changed)
         layout.addWidget(self.queue, 1)
@@ -265,7 +266,14 @@ class MainWindow(QMainWindow):
         """Add files handed to the app at launch."""
         self._add(paths)
 
+    def _running(self) -> bool:
+        return self.worker is not None and self.worker.isRunning()
+
     def _add(self, paths: list[Path]) -> None:
+        if self._running():
+            # The run is working through the list as it stood when it began.
+            self.statusBar().showMessage("Wait for this run to finish, then add photos")
+            return
         # New photos inherit whatever the framing panel currently shows.
         added = self.queue.add_paths(paths, self.framing.to_framing())
         total = len(self.queue.jobs())
@@ -321,8 +329,7 @@ class MainWindow(QMainWindow):
     def _on_batch_changed(self) -> None:
         self.settings = self.batch.to_settings(self.settings)
         self.framing.set_width(self.settings.output.output_width)
-        if naming.validate(self.settings.output.template) is None:
-            self.queue.refresh(self.settings)
+        self.queue.refresh(self.settings)
         self._update_enabled()
         self._schedule_preview()
 
@@ -339,7 +346,7 @@ class MainWindow(QMainWindow):
         return None
 
     def _update_enabled(self) -> None:
-        busy = self.worker is not None and self.worker.isRunning()
+        busy = self._running()
         has_jobs = not self.queue.is_empty()
         problem = self._template_problem() or self._destination_problem()
 
@@ -348,6 +355,13 @@ class MainWindow(QMainWindow):
         for btn in (self.remove_btn, self.clear_btn, self.select_all_btn):
             btn.setEnabled(has_jobs and not busy)
         self.framing.apply_all_btn.setEnabled(has_jobs and not busy)
+        # A run works through the photos as they are. Changing how they are
+        # framed, or where they go, part-way through would change the ones
+        # not yet reached, so everything that could is switched off until
+        # it has finished.
+        self.add_btn.setEnabled(not busy)
+        self.framing.setEnabled(not busy)
+        self.batch.setEnabled(not busy)
 
     # --- preview ----------------------------------------------------------
 
@@ -420,15 +434,18 @@ class MainWindow(QMainWindow):
         self.cancel_btn.setVisible(True)
 
         self.worker = ProcessWorker(jobs, self.settings, self)
+        self.worker.starting.connect(self._on_starting)
         self.worker.progress.connect(self._on_progress)
         self.worker.item_done.connect(self.queue.set_result)
         self.worker.finished_all.connect(self._on_finished)
         self.worker.start()
         self._update_enabled()
 
+    def _on_starting(self, number: int, total: int, name: str) -> None:
+        self.statusBar().showMessage(f"Processing {number} of {total}: {name}")
+
     def _on_progress(self, done: int, total: int, name: str) -> None:
         self.progress.setValue(done)
-        self.statusBar().showMessage(f"Processing {done} of {total}: {name}")
 
     def _cancel(self) -> None:
         if self.worker is not None:

@@ -165,11 +165,16 @@ class PreviewPane(QWidget):
         painter.save()
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 85))
+        # Measured from left + width and top + height. Qt's own right() and
+        # bottom() are one pixel short of those, which left the far bands
+        # starting inside the kept area and stopping short of the edge.
+        keep_right, keep_bottom = keep.x() + keep.width(), keep.y() + keep.height()
+        rect_right, rect_bottom = rect.x() + rect.width(), rect.y() + rect.height()
         for band in (
             QRect(rect.left(), rect.top(), keep.left() - rect.left(), rect.height()),
-            QRect(keep.right(), rect.top(), rect.right() - keep.right(), rect.height()),
+            QRect(keep_right, rect.top(), rect_right - keep_right, rect.height()),
             QRect(keep.left(), rect.top(), keep.width(), keep.top() - rect.top()),
-            QRect(keep.left(), keep.bottom(), keep.width(), rect.bottom() - keep.bottom()),
+            QRect(keep.left(), keep_bottom, keep.width(), rect_bottom - keep_bottom),
         ):
             if band.width() > 0 and band.height() > 0:
                 painter.drawRect(band)

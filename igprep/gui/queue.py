@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QHeaderView, QTableWidget, QTableWidgetItem,
 )
 
-from ..core.pipeline import Job, iter_images, plan, probe
+from ..core import naming
+from ..core.pipeline import Job, iter_images, lay_out, plan, probe, warnings_for
 from ..core.settings import Framing, Settings
 
 COL_FILE, COL_FRAMING, COL_OUTPUT, COL_STATUS = range(4)
@@ -48,6 +49,7 @@ class QueueTable(QTableWidget):
     """Drop target and selection list."""
 
     jobsChanged = Signal()
+    filesDropped = Signal(list)   # paths dropped on the list
     selectionChangedJob = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -91,7 +93,9 @@ class QueueTable(QTableWidget):
             if url.isLocalFile()
         ]
         if paths:
-            self.add_paths(paths)
+            # Handed to the window, so that photos dropped here are treated
+            # exactly as photos added any other way.
+            self.filesDropped.emit(paths)
             event.acceptProposedAction()
 
     # --- jobs -------------------------------------------------------------
@@ -186,25 +190,34 @@ class QueueTable(QTableWidget):
     def refresh(self, settings: Settings) -> None:
         """Recompute every row's framing summary, output name and warnings."""
         self._settings = settings
+        # With a filename template that cannot be used there are no names to
+        # show, but everything else about each photo still holds.
+        unnamed = naming.validate(settings.output.template)
         for row, job in enumerate(self._jobs):
             self._set_cell(
                 row, COL_FRAMING, describe(job.framing), None,
                 "Change this in the Framing panel on the right",
             )
             try:
-                preview = plan(job, settings, index=row + 1)
+                if unnamed is None:
+                    preview = plan(job, settings, index=row + 1)
+                    warnings = preview.warnings
+                else:
+                    warnings = warnings_for(lay_out(job, settings)[0])
             except Exception as exc:
                 self._set_cell(row, COL_OUTPUT, "-", ERROR_COLOR, str(exc))
                 self._set_cell(row, COL_STATUS, "Error", ERROR_COLOR, str(exc))
                 continue
 
-            self._set_cell(
-                row, COL_OUTPUT, preview.output.name, None, str(preview.output)
-            )
-            if preview.warnings:
+            if unnamed is None:
                 self._set_cell(
-                    row, COL_STATUS, "Will enlarge", WARN_COLOR,
-                    "\n".join(preview.warnings),
+                    row, COL_OUTPUT, preview.output.name, None, str(preview.output)
+                )
+            else:
+                self._set_cell(row, COL_OUTPUT, "-", None, unnamed)
+            if warnings:
+                self._set_cell(
+                    row, COL_STATUS, "Will enlarge", WARN_COLOR, "\n".join(warnings)
                 )
             else:
                 self._set_cell(row, COL_STATUS, "", None, "")

@@ -144,3 +144,47 @@ def test_save_is_atomic_and_leaves_no_temp_file(tmp_path):
     Settings().save(path)
     assert path.exists()
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+# --- a damaged file ------------------------------------------------------------
+
+def _load(tmp_path, document):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return Settings.load(path)
+
+
+def test_a_value_of_the_wrong_kind_costs_only_that_setting(tmp_path):
+    s = _load(tmp_path, {
+        "framing": {"ratio": "1:1", "border_pct": "thick", "frame_color": 7},
+        "output": {"template": 5, "quality": "high", "sharpen": 40},
+        "custom_name": ["not", "text"],
+        "show_grid_overlay": "yes",
+        "last_open_dir": 12,
+    })
+    assert s.framing.ratio == "1:1" and s.output.sharpen == 40      # kept
+    assert s.framing.border_pct == Framing().border_pct              # replaced
+    assert s.framing.frame_color == Framing().frame_color
+    assert s.output.template == OutputSettings().template
+    assert s.output.quality == OutputSettings().quality
+    assert (s.custom_name, s.last_open_dir) == ("", "")
+    assert s.show_grid_overlay == Settings().show_grid_overlay
+
+
+def test_true_is_not_taken_for_a_number(tmp_path):
+    s = _load(tmp_path, {"framing": {"border_pct": True}, "output": {"quality": True}})
+    assert s.framing.border_pct == Framing().border_pct
+    assert s.output.quality == OutputSettings().quality
+
+
+def test_a_colour_that_is_not_a_colour_falls_back_to_white(tmp_path):
+    for bad in ("#GGGGGG", "#FFF", "white", "#FFFFFFF"):
+        loaded = _load(tmp_path, {"framing": {"frame_color": bad}})
+        assert loaded.framing.frame_color == "#FFFFFF"
+    kept = _load(tmp_path, {"framing": {"frame_color": "#1a2B3c"}})
+    assert kept.framing.frame_color == "#1a2B3c"
+
+
+def test_a_file_of_the_wrong_shape_still_lets_the_app_start(tmp_path):
+    for document in ([], "text", 5, None, {"framing": [], "output": "x"}):
+        assert _load(tmp_path, document) == Settings()

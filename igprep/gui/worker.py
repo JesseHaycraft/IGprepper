@@ -13,6 +13,7 @@ from ..core.settings import Settings
 
 
 class ProcessWorker(QThread):
+    starting = Signal(int, int, str)   # which one, of how many, its filename
     progress = Signal(int, int, str)   # completed, total, the file just finished
     item_done = Signal(int, object)    # row index, Result
     finished_all = Signal(list)        # list[Result]
@@ -36,6 +37,7 @@ class ProcessWorker(QThread):
         for i, job in enumerate(self._jobs):
             if self._cancelled:
                 break
+            self.starting.emit(i + 1, total, job.source.name)
             # Index is 1-based so {n} starts at 1 in filename templates.
             result = process(job, self._settings, index=i + 1)
             results.append(result)

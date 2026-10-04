@@ -135,17 +135,31 @@ def _dest_dir(job: Job, settings: Settings) -> Path:
     return job.source.parent
 
 
-def plan(job: Job, settings: Settings, index: int = 1) -> Preview:
-    """Resolve a job into a concrete layout and output path."""
+def lay_out(job: Job, settings: Settings) -> tuple[g.Layout, Probe]:
+    """Where a job's photo will sit on its canvas: everything about the
+    result except what the file will be called."""
     info = probe(job.source)
-    ratio = g.ratio_for(job.framing.ratio)
     layout = g.plan(
         info.size,
-        ratio=ratio,
+        ratio=g.ratio_for(job.framing.ratio),
         width=settings.output.output_width,
         border_pct=job.framing.border_pct,
         mode=job.framing.mode,
     )
+    return layout, info
+
+
+def warnings_for(layout: g.Layout) -> list[str]:
+    if not layout.upscaled:
+        return []
+    pct = round(layout.scale * 100)
+    return [f"Source is smaller than the frame; it will be enlarged to {pct}%"]
+
+
+def plan(job: Job, settings: Settings, index: int = 1) -> Preview:
+    """Resolve a job into a concrete layout and output path."""
+    layout, info = lay_out(job, settings)
+    ratio = g.ratio_for(job.framing.ratio)
 
     stem = naming.render(
         settings.output.template,
@@ -159,13 +173,7 @@ def plan(job: Job, settings: Settings, index: int = 1) -> Preview:
     )
     output = _dest_dir(job, settings) / f"{stem}{OUTPUT_SUFFIX}"
 
-    warnings: list[str] = []
-    if layout.upscaled:
-        pct = round(layout.scale * 100)
-        warnings.append(
-            f"Source is smaller than the frame; it will be enlarged to {pct}%"
-        )
-    return Preview(layout, output, info.size, warnings)
+    return Preview(layout, output, info.size, warnings_for(layout))
 
 
 def _resolve_collision(output: Path, source: Path, settings: Settings):

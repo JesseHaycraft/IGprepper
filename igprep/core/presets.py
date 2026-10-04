@@ -76,8 +76,12 @@ class PresetStore(Generic[T]):
         return list(self._raw)
 
     def find(self, name: str) -> str | None:
-        """The stored spelling matching `name`, ignoring case."""
-        target = str(name).casefold().strip()
+        """The stored spelling matching `name`, ignoring case and spacing.
+
+        Compared the way `clean_name` will store it, so that a name which is
+        about to replace an existing preset is recognised as that preset.
+        """
+        target = " ".join(str(name).split()).casefold()
         for existing in self._raw:
             if existing.casefold() == target:
                 return existing

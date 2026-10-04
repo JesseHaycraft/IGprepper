@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
@@ -25,6 +26,8 @@ from . import naming, render
 from .jsonfile import write_json
 
 log = logging.getLogger(__name__)
+
+_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
 # Deliberately not renamed alongside the app: this is the folder holding
 # settings and presets, and changing it would orphan anything already
@@ -58,6 +61,33 @@ def _clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def _same_kind(value, default) -> bool:
+    """Whether a saved value is the kind of thing its setting holds.
+
+    A settings file can be edited by hand, or damaged. A number where text
+    belongs, or the reverse, is dropped in favour of the default, so that
+    one bad value costs one setting and not the whole file.
+    """
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, (int, float)):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(default, str):
+        return isinstance(value, str)
+    return True
+
+
+def _usable(cls, data: dict, skip=()) -> dict:
+    """The values in `data` that `cls` has a setting for, of the right kind."""
+    defaults = cls()
+    return {
+        f.name: data[f.name]
+        for f in fields(cls)
+        if f.name in data and f.name not in skip
+        and _same_kind(data[f.name], getattr(defaults, f.name))
+    }
+
+
 class _Record:
     """What `Framing` and `OutputSettings` have in common: each is a flat
     set of values that can be copied, and rebuilt from a saved file."""
@@ -67,11 +97,11 @@ class _Record:
 
     @classmethod
     def from_dict(cls, data):
-        """Built from saved values, ignoring any this version does not know."""
+        """Built from saved values, ignoring any this version does not know
+        and any that are not the kind of value their setting holds."""
         if not isinstance(data, dict):
             return cls()
-        known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in known})
+        return cls(**_usable(cls, data))
 
 
 @dataclass
@@ -96,7 +126,7 @@ class Framing(_Record):
             f.ratio = g.DEFAULT_RATIO
         if f.mode not in MODES:
             f.mode = DEFAULT_MODE
-        if not str(f.frame_color).startswith("#") or len(f.frame_color) != 7:
+        if not _HEX_COLOUR.fullmatch(f.frame_color):
             f.frame_color = render.DEFAULT_FRAME_COLOR
         f.border_pct = float(_clamp(f.border_pct, 0.0, f.max_border_pct(width)))
         return f
@@ -166,9 +196,9 @@ class Settings:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Settings":
-        nested = {"framing", "output"}
-        known = {f.name for f in fields(cls)} - nested
-        kwargs = {k: v for k, v in data.items() if k in known}
+        if not isinstance(data, dict):
+            return cls()
+        kwargs = _usable(cls, data, skip=("framing", "output"))
         kwargs["framing"] = Framing.from_dict(data.get("framing"))
         # Files written before the output settings were grouped have these
         # keys flat at the top level; from_dict ignores everything it does not
@@ -187,7 +217,8 @@ class Settings:
                 return cls.from_dict(json.load(fh))
         except FileNotFoundError:
             return cls()
-        except (OSError, ValueError, TypeError) as exc:
+        except Exception as exc:
+            # Whatever is wrong with the file, the app must still start.
             log.warning("ignoring unreadable settings at %s (%s)", path, exc)
             return cls()
 

@@ -205,3 +205,26 @@ def test_unknown_keys_in_a_preset_are_dropped(tmp_path):
         "framing": [{"name": "A", "values": {"ratio": "1:1", "future": 7}}],
     }))
     assert PresetLibrary.load(path).framing.get("A").ratio == "1:1"
+
+
+def test_a_name_differing_only_in_spacing_is_the_same_preset(library):
+    """Otherwise saving "Gallery  mat" replaces "Gallery mat" unasked."""
+    library.framing.save("Gallery mat", Framing(ratio="1:1"))
+    assert library.framing.exists("Gallery  mat")
+    assert library.framing.exists("  gallery\tMAT ")
+    assert library.framing.find("Gallery   mat") == "Gallery mat"
+    assert not library.framing.exists("Gallerymat")
+
+
+def test_a_preset_with_a_value_of_the_wrong_kind_still_loads(tmp_path):
+    path = tmp_path / "presets.json"
+    path.write_text(json.dumps({
+        "version": VERSION,
+        "framing": [{"name": "Odd", "values": {"ratio": "1:1", "border_pct": "wide"}}],
+        "output": [{"name": "Odd", "values": {"template": 9, "quality": 80}}],
+    }), encoding="utf-8")
+    library = PresetLibrary.load(path)
+    framing = library.framing.get("Odd")
+    assert framing.ratio == "1:1" and framing.border_pct == Framing().border_pct
+    output = library.output.get("Odd")
+    assert output.quality == 80 and output.template == OutputSettings().template
