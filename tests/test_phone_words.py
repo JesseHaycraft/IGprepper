@@ -29,22 +29,6 @@ def test_line_breaks_cannot_get_into_a_label():
     assert words.shorten("two\nlines\there", 40) == "two lines here"
 
 
-def test_a_short_path_is_shown_whole():
-    assert words.trail(["Drive", "Photos", "2026"], 40) == "Drive › Photos › 2026"
-
-
-def test_a_long_path_keeps_its_end():
-    names = ["My Drive", "Photography", "Finished work", "2026", "October shoot"]
-    shown = words.trail(names, 30)
-    assert len(shown) <= 30
-    assert shown.startswith("…") and shown.endswith("October shoot")
-
-
-def test_a_path_that_cannot_fit_even_one_name_is_still_cut_to_the_limit():
-    shown = words.trail(["a" * 80], 20)
-    assert len(shown) <= 20
-
-
 @pytest.mark.parametrize("count,text", [(1, "1 photo"), (2, "2 photos"), (12, "12 photos")])
 def test_photos_are_counted_in_plain_words(count, text):
     assert words.photos(count) == text

@@ -19,6 +19,7 @@ from PIL import Image
 from igprep.core import geometry as g
 from igprep.core import naming, render
 from igprep.core.preview import (
+    PROXY_MAX,
     QUICK_PROXY_MAX,
     make_proxy,
     render_preview,
@@ -115,9 +116,14 @@ def frame(
 def preview(
     image: Image.Image, framing: Framing, placement: g.Placement | None = None
 ) -> Image.Image:
-    """A small scale model of the framed result, for the screen."""
+    """A small scale model of the framed result, for the screen.
+
+    `image` may be a photo at full size or one already cut down for the
+    purpose. The second is the usual case, redrawn on every press of a
+    button, and is used as it is.
+    """
     return render_preview(
-        make_proxy(image),
+        image if max(image.size) <= PROXY_MAX else make_proxy(image),
         ratio=framing.aspect(),
         border_pct=framing.border_pct,
         mode=framing.mode,

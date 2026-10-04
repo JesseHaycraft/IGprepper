@@ -13,6 +13,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from igprep.core.jsonfile import write_json
+
 SIDES = ("input", "output")
 
 
@@ -59,9 +61,4 @@ def save(path: Path, places: dict[str, Place]) -> None:
         for side, place in places.items()
         if place.tree is not None
     }
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Written beside and swapped in, so a crash cannot leave half a file.
-    partial = path.with_suffix(".part")
-    partial.write_text(json.dumps(stored), encoding="utf-8")
-    partial.replace(path)
+    write_json(path, stored)

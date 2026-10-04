@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from igprep.core.jsonfile import write_json
+
 # A list is what a folder gets until told otherwise, so only the folders
 # shown as tiles need writing down. Old ones are let go eventually.
 MOST_FOLDERS = 500
@@ -53,13 +55,7 @@ class Views:
         self.save()
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Written beside and swapped in, so a crash cannot leave half a file.
-        partial = self.path.with_suffix(".part")
-        partial.write_text(
-            json.dumps({"tiled": self.tiled, "split": self.split}), encoding="utf-8"
-        )
-        partial.replace(self.path)
+        write_json(self.path, {"tiled": self.tiled, "split": self.split})
 
 
 def divide(upper: float, lower: float, moved: float, least: float) -> float | None:

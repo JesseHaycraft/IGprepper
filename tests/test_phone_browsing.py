@@ -58,18 +58,6 @@ def test_a_folder_is_never_a_photo_whatever_it_is_called():
     assert not folder("holiday.jpg").is_photo
 
 
-def test_thumbnail_flag_is_read_from_the_storage_apps_flags():
-    assert file("a.jpg", flags=1).has_thumbnail
-    assert file("a.jpg", flags=1 | 2 | 4).has_thumbnail
-    assert not file("a.jpg", flags=2 | 4).has_thumbnail
-
-
-def test_capabilities_differ_for_files_and_folders():
-    assert "overwrite" in file("a.jpg").capabilities()
-    assert "create items inside" in folder("a").capabilities()
-    assert folder("a").capabilities()["create items inside"] is True
-
-
 # --- the order of a listing -----------------------------------------------------
 
 def test_folders_come_first_by_name_then_files_newest_first():
@@ -142,7 +130,7 @@ def test_places_survive_being_saved_and_loaded(tmp_path):
     }
     places.save(path, before)
     assert places.load(path) == before
-    assert not path.with_suffix(".part").exists()
+    assert not path.with_suffix(".tmp").exists()
 
 
 def test_a_side_with_no_folder_is_simply_absent(tmp_path):

@@ -118,7 +118,9 @@ class Thumbnails:
         self.cache.move_to_end(key)
         self._trim()
         self._send()
-        self.on_ready()
+        if found is not None:
+            # A file with no picture looks the same as it did: nothing to redraw.
+            self.on_ready()
 
     def _nudge(self, round_) -> None:
         if round_ == self.round:

@@ -19,38 +19,13 @@ PHOTO_TYPES = frozenset(
 # Storage apps do not always know a file's type; its name usually does.
 PHOTO_ENDINGS = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif")
 
-# Android's own flag values (DocumentsContract.Document.FLAG_*), written out
-# so that this module needs nothing from Android.
-SUPPORTS_THUMBNAIL = 1
-_SUPPORTS_WRITE = 2
-_SUPPORTS_DELETE = 4
-_DIR_SUPPORTS_CREATE = 8
-_SUPPORTS_RENAME = 64
-_SUPPORTS_COPY = 128
-_SUPPORTS_MOVE = 256
-
-# What a storage app may or may not allow, in the order worth reading. The
-# two lists differ because Android's "write" flag only ever applies to files;
-# reporting it as refused for a folder would read as a problem when it is not.
-_SHARED_CAPABILITIES = (
-    ("rename", _SUPPORTS_RENAME),
-    ("move", _SUPPORTS_MOVE),
-    ("copy", _SUPPORTS_COPY),
-    ("delete", _SUPPORTS_DELETE),
-)
-_FOLDER_CAPABILITIES = (
-    ("create items inside", _DIR_SUPPORTS_CREATE),
-) + _SHARED_CAPABILITIES
-_FILE_CAPABILITIES = (("overwrite", _SUPPORTS_WRITE),) + _SHARED_CAPABILITIES
-
-
 @dataclass
 class Entry:
     doc_id: str
     name: str
     is_dir: bool
     size: int | None
-    flags: int
+    flags: int  # what the storage app says may be done with it, as it gave them
     mime: str = ""
     modified: int = 0  # milliseconds since 1970, or 0 when the storage app does not say
 
@@ -61,14 +36,6 @@ class Entry:
             return False
         return self.mime in PHOTO_TYPES or self.name.lower().endswith(PHOTO_ENDINGS)
 
-    @property
-    def has_thumbnail(self) -> bool:
-        """Whether the storage app offers a small picture of this file."""
-        return bool(self.flags & SUPPORTS_THUMBNAIL)
-
-    def capabilities(self) -> dict[str, bool]:
-        table = _FOLDER_CAPABILITIES if self.is_dir else _FILE_CAPABILITIES
-        return {label: bool(self.flags & bit) for label, bit in table}
 
 
 def ordered(entries: list[Entry]) -> list[Entry]:

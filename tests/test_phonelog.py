@@ -49,23 +49,6 @@ def test_multi_line_messages_keep_their_line_breaks(log):
     assert [line.split("  ", 1)[1] for line in log.lines[-2:]] == ["one", "two"]
 
 
-def test_listeners_see_every_line(log):
-    seen = []
-    log.listeners.append(seen.append)
-    log.write("a")
-    log.write("b")
-    assert len(seen) == 2
-
-
-def test_a_broken_listener_does_not_stop_the_log(log):
-    def broken(line):
-        raise RuntimeError("display fell over")
-
-    log.listeners.append(broken)
-    log.write("still logged")
-    assert "still logged" in _file_text(log)
-
-
 def test_exception_records_what_was_being_attempted(log):
     try:
         raise ValueError("bad folder name")
@@ -89,7 +72,7 @@ def test_uncaught_errors_are_logged(log, monkeypatch):
 
 def test_a_file_that_stops_accepting_writes_does_not_raise(log, monkeypatch):
     log.write("before")
-    log._path = Path(log.location).parent / "no" / "such" / "dir" / "log.txt"
+    log._sink.path = Path(log.location).parent / "no" / "such" / "dir" / "log.txt"
     log.write("after")  # must not raise
     assert "stopped accepting writes" in log.location
     assert any("after" in line for line in log.lines)

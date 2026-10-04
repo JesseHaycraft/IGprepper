@@ -11,6 +11,8 @@ preview from the same code.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from PIL import Image, ImageDraw
 
 from . import geometry as g
@@ -87,18 +89,18 @@ def guide_lines(size: tuple[int, int], border: int) -> tuple[list[int], list[int
     return along(left, right), along(top, bottom)
 
 
-def with_guides(preview: Image.Image, border_pct: float) -> Image.Image:
-    """A copy of a preview with dashed guide lines over the photo.
+@lru_cache(maxsize=8)
+def _guides(size: tuple[int, int], border: int) -> Image.Image:
+    """The guide lines alone, on nothing, for a preview of this size.
 
-    Each line is dark with light dashes on it, so it shows against sky and
-    shadow alike.
+    They depend only on the shape of the frame, and are wanted again on every
+    redraw while a photo is being turned, so they are kept once drawn.
     """
-    border = g.border_px(preview.width, border_pct)
     left, top = border, border
-    right, bottom = preview.width - border - 1, preview.height - border - 1
-    xs, ys = guide_lines(preview.size, border)
+    right, bottom = size[0] - border - 1, size[1] - border - 1
+    xs, ys = guide_lines(size, border)
 
-    overlay = Image.new("RGBA", preview.size, (0, 0, 0, 0))
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     dark, light = (0, 0, 0, 120), (255, 255, 255, 235)
     for x in xs:
@@ -109,5 +111,14 @@ def with_guides(preview: Image.Image, border_pct: float) -> Image.Image:
         draw.line([(left, y), (right, y)], fill=dark)
         for x in range(left, right + 1, 2 * GUIDE_DASH):
             draw.line([(x, y), (min(x + GUIDE_DASH - 1, right), y)], fill=light)
+    return overlay
 
+
+def with_guides(preview: Image.Image, border_pct: float) -> Image.Image:
+    """A copy of a preview with dashed guide lines over the photo.
+
+    Each line is dark with light dashes on it, so it shows against sky and
+    shadow alike.
+    """
+    overlay = _guides(preview.size, g.border_px(preview.width, border_pct))
     return Image.alpha_composite(preview.convert("RGBA"), overlay).convert("RGB")
