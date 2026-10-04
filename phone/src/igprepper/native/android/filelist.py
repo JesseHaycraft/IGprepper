@@ -20,8 +20,9 @@ from __future__ import annotations
 from java import cast, dynamic_proxy, jclass
 from PIL import Image, ImageOps
 
-from . import androidui, palette
-from .thumbs import Thumbnails
+from ... import palette
+from ...thumbs import Thumbnails
+from . import ui
 
 AbsListLayout = jclass("android.widget.AbsListView$LayoutParams")
 Color = jclass("android.graphics.Color")
@@ -130,8 +131,10 @@ class _Press(dynamic_proxy(ItemClick)):
 
 class FileList:
     def __init__(self, holder, loop, log, icon, on_press) -> None:
-        """`holder` is the Android view to fill. `icon(name, colour)` gives a
-        bitmap. `on_press(entry)` is called when a row or tile is pressed."""
+        """`holder` is the empty box on screen to fill. `icon(name, colour)`
+        gives a bitmap. `on_press(entry)` is called when a row or tile is
+        pressed."""
+        holder = ui.native(holder)
         self.loop, self.log, self.icon, self.on_press = loop, log, icon, on_press
         self.rows: list = []
         self.checked: set[str] = set()
@@ -140,7 +143,7 @@ class FileList:
         self.refresh_due = False
         self.thumbs = Thumbnails(loop, self.picture_arrived)
 
-        context = androidui.activity()
+        context = ui.activity()
         holder.setBackgroundColor(Color.parseColor(palette.PANEL))
         self.press = _Press(self)
 
@@ -152,7 +155,7 @@ class FileList:
         self.list.setOnItemClickListener(self.press)
         holder.addView(self.list, RelativeLayoutParams(FILL, FILL))
 
-        gap = androidui.dp(TILE_GAP_DP)
+        gap = ui.dp(TILE_GAP_DP)
         self.grid = GridView(context)
         self.grid.setNumColumns(COLUMNS)
         self.grid.setHorizontalSpacing(gap)
@@ -168,23 +171,23 @@ class FileList:
         self.note = TextView(context)
         self.note.setTextColor(FAINT)
         self.note.setGravity(Gravity.CENTER)
-        self.note.setPadding(androidui.dp(16), 0, androidui.dp(16), 0)
+        self.note.setPadding(ui.dp(16), 0, ui.dp(16), 0)
         holder.addView(self.note, RelativeLayoutParams(FILL, FILL))
 
         self.counter = TextView(context)
         self.counter.setTextColor(Color.parseColor(palette.ON_ACCENT))
         self.counter.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13)
         self.counter.setPadding(
-            androidui.dp(12), androidui.dp(5), androidui.dp(12), androidui.dp(5)
+            ui.dp(12), ui.dp(5), ui.dp(12), ui.dp(5)
         )
         pill = GradientDrawable()
         pill.setColor(ACCENT)
-        pill.setCornerRadius(androidui.dp(16))
+        pill.setCornerRadius(ui.dp(16))
         self.counter.setBackground(pill)
         corner = RelativeLayoutParams(WRAP, WRAP)
         corner.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
         corner.addRule(RelativeLayout.ALIGN_PARENT_END)
-        corner.setMargins(0, 0, androidui.dp(10), androidui.dp(8))
+        corner.setMargins(0, 0, ui.dp(10), ui.dp(8))
         holder.addView(self.counter, corner)
 
         self.arrange()
@@ -204,7 +207,7 @@ class FileList:
 
     @property
     def thumb_px(self) -> int:
-        return TILE_THUMB_PX if self.tiles else androidui.dp(THUMB_DP)
+        return TILE_THUMB_PX if self.tiles else ui.dp(THUMB_DP)
 
     def arrange(self) -> None:
         self.list.setVisibility(View.GONE if self.tiles else View.VISIBLE)
@@ -238,7 +241,7 @@ class FileList:
         for a photo this app has just written and so already has."""
         side = self.thumb_px
         square = ImageOps.fit(picture.convert("RGB"), (side, side))
-        self.thumbs.put(doc_id, androidui.bitmap(square))
+        self.thumbs.put(doc_id, ui.bitmap(square))
 
     def say(self, text: str | None) -> None:
         """Words in the middle, for when there is nothing to show."""
@@ -286,21 +289,21 @@ class FileList:
         return entry.doc_id in self.checked
 
     def new_row(self):
-        context = androidui.activity()
+        context = ui.activity()
         row = LinearLayout(context)
         row.setOrientation(LinearLayout.HORIZONTAL)
         row.setGravity(Gravity.CENTER_VERTICAL)
-        row.setPadding(androidui.dp(10), 0, androidui.dp(12), 0)
-        row.setLayoutParams(AbsListLayout(FILL, androidui.dp(ROW_DP)))
+        row.setPadding(ui.dp(10), 0, ui.dp(12), 0)
+        row.setLayoutParams(AbsListLayout(FILL, ui.dp(ROW_DP)))
 
         mark = ImageView(context)
-        side = androidui.dp(MARK_DP)
+        side = ui.dp(MARK_DP)
         before = LinearLayoutParams(side, side)
-        before.setMarginEnd(androidui.dp(10))
+        before.setMarginEnd(ui.dp(10))
         row.addView(mark, before)
 
         picture = ImageView(context)
-        side = androidui.dp(THUMB_DP)
+        side = ui.dp(THUMB_DP)
         row.addView(picture, LinearLayoutParams(side, side))
 
         name = TextView(context)
@@ -309,8 +312,8 @@ class FileList:
         name.setEllipsize(TruncateAt.MIDDLE)
         name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15)
         beside = LinearLayoutParams(0, WRAP, 1.0)
-        beside.setMarginStart(androidui.dp(12))
-        beside.setMarginEnd(androidui.dp(8))
+        beside.setMarginStart(ui.dp(12))
+        beside.setMarginEnd(ui.dp(8))
         row.addView(name, beside)
         return row
 
@@ -333,16 +336,16 @@ class FileList:
         row.setBackgroundColor(CHECKED_ROW if checked else Color.TRANSPARENT)
 
     def new_tile(self):
-        context = androidui.activity()
+        context = ui.activity()
         tile = LinearLayout(context)
         tile.setOrientation(LinearLayout.VERTICAL)
-        edge = androidui.dp(TILE_EDGE_DP)
+        edge = ui.dp(TILE_EDGE_DP)
         tile.setPadding(edge, edge, edge, edge)
         tile.setLayoutParams(AbsListLayout(FILL, WRAP))
 
         frame = FrameLayout(context)
         frame.setBackgroundColor(Color.parseColor(palette.TILE))
-        tile.addView(frame, LinearLayoutParams(FILL, androidui.dp(TILE_UNMEASURED_DP)))
+        tile.addView(frame, LinearLayoutParams(FILL, ui.dp(TILE_UNMEASURED_DP)))
 
         picture = ImageView(context)
         frame.addView(picture, FrameLayoutParams(FILL, FILL))
@@ -353,19 +356,19 @@ class FileList:
         disc.setShape(GradientDrawable.OVAL)
         disc.setColor(Color.parseColor(palette.SCRIM))
         mark.setBackground(disc)
-        inset = androidui.dp(2)
+        inset = ui.dp(2)
         mark.setPadding(inset, inset, inset, inset)
-        side = androidui.dp(MARK_DP + 6)
+        side = ui.dp(MARK_DP + 6)
         corner = FrameLayoutParams(side, side)
         corner.gravity = Gravity.TOP | Gravity.START
-        corner.setMargins(androidui.dp(6), androidui.dp(6), 0, 0)
+        corner.setMargins(ui.dp(6), ui.dp(6), 0, 0)
         frame.addView(mark, corner)
 
         name = TextView(context)
         name.setSingleLine(True)
         name.setEllipsize(TruncateAt.MIDDLE)
         name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13)
-        name.setPadding(androidui.dp(2), androidui.dp(4), androidui.dp(2), androidui.dp(2))
+        name.setPadding(ui.dp(2), ui.dp(4), ui.dp(2), ui.dp(2))
         tile.addView(name, LinearLayoutParams(FILL, WRAP))
         return tile
 
@@ -374,11 +377,11 @@ class FileList:
         picture in it should be: square."""
         column = self.grid.getColumnWidth()
         if column <= 0:
-            gap = androidui.dp(TILE_GAP_DP)
+            gap = ui.dp(TILE_GAP_DP)
             column = (self.grid.getWidth() - gap * (COLUMNS + 1)) // COLUMNS
         if column <= 0:
-            column = androidui.dp(TILE_UNMEASURED_DP)
-        return column - 2 * androidui.dp(TILE_EDGE_DP)
+            column = ui.dp(TILE_UNMEASURED_DP)
+        return column - 2 * ui.dp(TILE_EDGE_DP)
 
     def fill_tile(self, tile, entry) -> None:
         frame = cast(FrameLayout, tile.getChildAt(0))

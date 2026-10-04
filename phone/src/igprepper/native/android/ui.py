@@ -21,7 +21,7 @@ from java import dynamic_proxy, jclass
 from org.beeware.android import MainActivity
 from PIL import Image
 
-from . import palette
+from ... import palette
 
 AlertDialog = jclass("android.app.AlertDialog")
 BitmapDrawable = jclass("android.graphics.drawable.BitmapDrawable")
@@ -51,6 +51,12 @@ _MIN_SDK_FOR_BACK = 33
 
 def activity():
     return MainActivity.singletonThis
+
+
+def native(widget):
+    """Android's own view behind one of the toolkit's widgets. Given a view,
+    it is handed straight back."""
+    return getattr(getattr(widget, "_impl", None), "native", widget)
 
 
 _density: float | None = None
@@ -88,31 +94,31 @@ def drawable(image: Image.Image, size_dp: float):
     return result
 
 
-def plain_button(native) -> None:
+def plain_button(button) -> None:
     """Labels as written, not in capitals, and no wider than they need be.
 
     Capitals are how Android buttons used to look. They also discard any
     icon placed in the label.
     """
-    native.setAllCaps(False)
-    native.setMinWidth(0)
-    native.setMinimumWidth(0)
+    view = native(button)
+    view.setAllCaps(False)
+    view.setMinWidth(0)
+    view.setMinimumWidth(0)
     # Android's side padding is generous enough that three labelled buttons
     # do not fit across a phone.
-    native.setPadding(
-        dp(10), native.getPaddingTop(), dp(10), native.getPaddingBottom()
-    )
+    view.setPadding(dp(10), view.getPaddingTop(), dp(10), view.getPaddingBottom())
 
 
-def label(native, text: str, icon=None, after: bool = False) -> None:
+def label(button, text: str, icon=None, after: bool = False) -> None:
     """Set a button's label, with an icon before it if one is given, or
     `after` it.
 
     The icon is placed in the text itself, so it stays beside the words
     rather than at the far edge of a wide button.
     """
+    view = native(button)
     if icon is None:
-        native.setText(text)
+        view.setText(text)
         return
     if not text:
         written, at = _PLACEHOLDER, 0
@@ -125,7 +131,7 @@ def label(native, text: str, icon=None, after: bool = False) -> None:
         ImageSpan(icon, ImageSpan.ALIGN_CENTER), at, at + 1,
         Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
     )
-    native.setText(content)
+    view.setText(content)
 
 
 def toast(text: str) -> None:
@@ -244,7 +250,7 @@ def end_showing_text(holder, colour: str, size_sp: float):
     text.setGravity(Gravity.START | Gravity.CENTER_VERTICAL)
     text.setTextColor(Color.parseColor(colour))
     text.setTextSize(TypedValue.COMPLEX_UNIT_SP, size_sp)
-    holder.addView(text, RelativeLayoutParams(_FILL, _FILL))
+    native(holder).addView(text, RelativeLayoutParams(_FILL, _FILL))
     return text
 
 
@@ -252,9 +258,9 @@ def set_text(view, text: str) -> None:
     view.setText(text)
 
 
-def height(native) -> int:
+def height(widget) -> int:
     """How tall a piece of the screen is at the moment, in its pixels."""
-    return int(native.getHeight())
+    return int(native(widget).getHeight())
 
 
 class _Drag(dynamic_proxy(View.OnTouchListener)):
@@ -295,6 +301,7 @@ def drag_handle(holder, on_start, on_move, on_end, on_error):
     grip.setBackground(bar)
     middle = RelativeLayoutParams(dp(44), dp(4))
     middle.addRule(RelativeLayout.CENTER_IN_PARENT)
+    holder = native(holder)
     holder.addView(grip, middle)
 
     listener = _Drag(on_start, on_move, on_end, on_error)
@@ -312,6 +319,7 @@ def outline_dropdown(spinner, colour: str) -> None:
     panel.setColor(Color.parseColor(palette.MENU))
     panel.setStroke(dp(1.5), Color.parseColor(colour))
     panel.setCornerRadius(dp(8))
+    spinner = native(spinner)
     spinner.setPopupBackgroundDrawable(panel)
     spinner.setDropDownVerticalOffset(dp(6))
 
@@ -382,3 +390,12 @@ def device() -> list[str]:
         f"Android {Build.VERSION.RELEASE} (API {Build.VERSION.SDK_INT})",
         f"Model: {Build.MANUFACTURER} {Build.MODEL}",
     ]
+
+
+def self_test():
+    """The build's own check, if the app was started to run it; else None."""
+    if not launched_with("selftest"):
+        return None
+    from . import selftest
+
+    return selftest.run

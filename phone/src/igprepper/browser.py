@@ -10,7 +10,8 @@ once, in Android's own picker, and the app may then go anywhere inside it
 but never above it. So "Up" stops at the granted folder, and "Change" is how
 to start somewhere else.
 
-This module only imports on Android.
+Nothing here speaks to Android itself: what it needs from the phone it gets
+from `native`.
 """
 
 from __future__ import annotations
@@ -21,14 +22,17 @@ import toga
 from toga.style import Pack
 from toga.style.pack import CENTER, ROW
 
-from . import androidui, entries, storage, words
-from .filelist import FileList
+from . import entries, words
+from .native import filelist, storage, ui
 from .palette import DIM
 from .places import Place
 
 # Cloud storage hands over a large folder in instalments.
 RECHECK_SECONDS = 1.5
 RECHECKS = 40
+# Before a name is checked against a folder, the folder is read to its end.
+# This is how long that is given before it is taken to be not going to end.
+WHOLE_SECONDS = 20.0
 
 
 class Browser:
@@ -50,7 +54,7 @@ class Browser:
         self.rechecking = False  # a further look at this folder is booked
         self.visit = 0  # counts changes of folder, to drop late answers
         self.name_dialog = None
-        self.files: FileList | None = None
+        self.files: filelist.FileList | None = None
         self.build()
 
     # --- the screen -------------------------------------------------------------
@@ -102,11 +106,11 @@ class Browser:
         self.show_rows(fresh=True)
 
     def build_list(self) -> None:
-        self.path_view = androidui.end_showing_text(
-            self.path_holder._impl.native, DIM, 13
+        self.path_view = ui.end_showing_text(
+            self.path_holder, DIM, 13
         )
-        self.files = FileList(
-            self.holder._impl.native, self.app.loop, self.app.log,
+        self.files = filelist.FileList(
+            self.holder, self.app.loop, self.app.log,
             self.app.icon_bitmap, self.pressed,
         )
 
@@ -144,7 +148,7 @@ class Browser:
 
     def show_path(self) -> None:
         if self.path_view is not None:
-            androidui.set_text(self.path_view, self.path)
+            ui.set_text(self.path_view, self.path)
         self.app.relabel(
             self.choose_btn, "Change" if self.tree is not None else "Choose folder"
         )
@@ -367,7 +371,7 @@ class Browser:
         if visit == self.visit:
             self.take(found, visit)
 
-    def take(self, found: storage.Listing, visit: int, attempt: int = 0) -> None:
+    def take(self, found: entries.Listing, visit: int, attempt: int = 0) -> None:
         """Show a listing of the folder we are in. If the storage app says
         there is more to come, look again shortly, up to a point."""
         self.entries = entries.ordered(found.entries)
@@ -388,6 +392,24 @@ class Browser:
         if more and not self.rechecking:
             self.rechecking = True
             self.app.loop.call_later(RECHECK_SECONDS, self.recheck, visit, attempt + 1)
+
+    async def whole_listing(self) -> tuple[list[entries.Entry], bool]:
+        """Everything in the folder we are in, read until the storage app
+        says that is all. Returns what was found, and whether it is in fact
+        all: False if the storage app was still fetching when time ran out.
+
+        For checking a new name against, where a partial list is not good
+        enough: a file not yet listed is still a file with that name.
+        """
+        loop = self.app.loop
+        give_up = loop.time() + WHOLE_SECONDS
+        while True:
+            found = await self.app.work(storage.listing, self.tree, self.here)
+            if not found.loading:
+                return found.entries, True
+            if loop.time() >= give_up:
+                return found.entries, False
+            await asyncio.sleep(RECHECK_SECONDS)
 
     def recheck(self, visit: int, attempt: int) -> None:
         if visit == self.visit:
@@ -417,7 +439,7 @@ class Browser:
         """Ask for a name, as a file manager does."""
         if self.app.busy or self.tree is None:
             return
-        self.name_dialog = androidui.ask_for_text(
+        self.name_dialog = ui.ask_for_text(
             "New folder", "Folder name", "Create", self.name_given
         )
 
@@ -436,8 +458,21 @@ class Browser:
             return
         log.section("Creating a folder")
         # Some storage will happily hold two folders of one name. Nobody
-        # wants that, so it is settled here.
-        if any(e.is_dir and e.name.lower() == name.lower() for e in self.entries):
+        # wants that, so it is settled here, against the whole folder and not
+        # just as much of it as has arrived.
+        if self.files is not None:
+            self.files.count("Checking this folder\u2026")
+        found, whole = await self.whole_listing()
+        self.show_count()
+        if not whole:
+            log.write("The folder was still loading; no folder created.")
+            await app.tell(
+                "Still loading",
+                "This folder is still being read, so it cannot yet be checked "
+                "for a folder of that name. Try again in a moment.",
+            )
+            return
+        if any(e.is_dir and e.name.lower() == name.lower() for e in found):
             log.write("A folder of that name is already here; none created.")
             await app.tell(
                 "Already there",

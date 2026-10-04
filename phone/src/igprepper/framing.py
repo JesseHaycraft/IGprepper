@@ -172,14 +172,20 @@ def small_copy(jpeg: bytes, side: int = 320) -> Image.Image:
         return image.convert("RGB")
 
 
-def output_name(source_name: str, taken) -> str:
+def output_name(source_name: str, taken, stamp: str | None = None) -> str:
     """The desktop's default name for a framed photo, kept clear of `taken`.
 
     Checked here rather than left to the storage: Google Drive will happily
     hold two files with the same name in one folder.
+
+    `stamp` is added to the name when `taken` may not be the whole story,
+    because the folder could not be read to its end. A time of day, say,
+    which nothing already there will be carrying.
     """
     stem = source_name.rsplit(".", 1)[0] if "." in source_name else source_name
     base = naming.render(naming.DEFAULT_TEMPLATE, name=stem or "photo")
+    if stamp:
+        base = f"{base}_{stamp}"
     taken = {name.lower() for name in taken}
     candidate, number = f"{base}.jpg", 1
     while candidate.lower() in taken:

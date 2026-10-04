@@ -26,13 +26,15 @@ import time
 from datetime import datetime
 
 from java import jarray, jclass
+from java.lang import String
 from PIL import Image
 
 from igprep.core import geometry as g
 
-from . import androidimage, androidui, framing, imagetests, places, storage, touch
-from .app import FIT_CHOICES, GUIDE_SECONDS, LEAST_LIST_DP
-from .fixtures import FIXTURES
+from ... import framing, imagetests, places
+from ...app import FIT_CHOICES, GUIDE_SECONDS, LEAST_LIST_DP
+from ...fixtures import FIXTURES
+from . import decoder, storage, touch, ui
 
 FOLDER = "Download/IGprepper"
 LARGE_FILE_MB = 20
@@ -71,6 +73,27 @@ def read_file(tree, doc_id: str) -> bytes:
     return storage.read_uri(storage.document_uri(tree, doc_id))
 
 
+def finished_in_gallery(names: list[str]) -> int:
+    """How many of these photos the gallery holds and no longer counts as
+    being written. An unfinished one is kept out of sight."""
+    cursor = storage.resolver().query(
+        storage.GalleryImages.EXTERNAL_CONTENT_URI,
+        jarray(String)(["_display_name"]),
+        "relative_path LIKE ? AND is_pending = 0",
+        jarray(String)(["Pictures/IGprepper/%"]),
+        None,
+    )
+    if cursor is None:
+        return 0
+    try:
+        found = []
+        while cursor.moveToNext():
+            found.append(str(cursor.getString(0)))
+    finally:
+        cursor.close()
+    return sum(1 for name in names if name in found)
+
+
 def uptime() -> int:
     return SystemClock.uptimeMillis()
 
@@ -104,7 +127,7 @@ def second_finger(action: int) -> int:
 
 
 def press_confirm(dialog) -> None:
-    dialog.getButton(androidui.DialogInterface.BUTTON_POSITIVE).performClick()
+    dialog.getButton(ui.DialogInterface.BUTTON_POSITIVE).performClick()
 
 
 def press_back() -> None:
@@ -176,7 +199,7 @@ async def run(app) -> None:
     app.unattended = True
     log.section("Automated self-test")
     try:
-        ok = await app.work(imagetests.run_all, log, androidimage.decode_to_srgb)
+        ok = await app.work(imagetests.run_all, log, decoder.decode_to_srgb)
         log.write("")
         log.write("Image tests finished: " + ("all passed." if ok else "something FAILED."))
 
@@ -334,6 +357,18 @@ def write_test_files(log, tree, parent: str) -> None:
         )
     except Exception:
         log.exception("writing the large test file")
+
+    # What a save that fails part-way relies on to clear up after itself.
+    try:
+        doomed = storage.create_file(tree, parent, "igprepper-test-delete.txt", "text/plain")
+        storage.delete(tree, doomed.doc_id)
+        gone = doomed.name not in [e.name for e in storage.children(tree, parent)]
+        log.write(
+            f"{'PASS' if gone else 'FAIL'}  A file this app had just created "
+            "could be deleted again."
+        )
+    except Exception:
+        log.exception("deleting a file this app created")
 
 
 # --- the input folder ---------------------------------------------------------
@@ -506,7 +541,7 @@ async def editor(app) -> None:
         icc_profile=source.info["icc_profile"],
     )
     image = await app.work(
-        framing.prepare, stored.getvalue(), androidimage.decode_to_srgb
+        framing.prepare, stored.getvalue(), decoder.decode_to_srgb
     )
     turned = image.size == source.size
     worst = 0
@@ -568,6 +603,21 @@ async def editor(app) -> None:
         f"Under the photo: {app.hint_label.text!r}",
     )
     await hold(app, "editor")
+
+    # While the app is busy, nothing that changes the framing can be touched.
+    controls = (app.ratio_select, app.fit_select, app.border_slider)
+    app.busy = True
+    app.refresh_controls()
+    off = not any(bool(c._impl.native.isEnabled()) for c in controls)
+    await hold(app, "editor-busy")
+    app.busy = False
+    app.refresh_controls()
+    back_on = all(bool(c._impl.native.isEnabled()) for c in controls)
+    verdict(
+        app, off and back_on and is_on(app.save_btn),
+        "While busy the shape menu, the fit menu and the border slider are "
+        "switched off, and come back afterwards.",
+    )
     await rotation(app)
     await fingers(app)
 
@@ -602,6 +652,12 @@ async def editor(app) -> None:
         and set(names(app.source)) == set(names(target)),
         f"{len(new)} new files head the output list, and the input list, "
         "looking at the same folder, shows them too.",
+    )
+    in_gallery = await app.work(finished_in_gallery, [e.name for e in new])
+    verdict(
+        app, in_gallery >= len(new),
+        f"{in_gallery} of the {len(new)} saved photos are in the gallery, each "
+        "marked as finished.",
     )
     for entry in new:
         data = await app.work(read_file, target.tree, entry.doc_id)
@@ -917,7 +973,7 @@ async def divider(app) -> None:
     log.section("Self-test: the divider")
 
     handle = app.divider._impl.native
-    least = androidui.dp(LEAST_LIST_DP)
+    least = ui.dp(LEAST_LIST_DP)
     across = handle.getWidth() / 2
 
     async def drag(down: float) -> tuple[int, int]:

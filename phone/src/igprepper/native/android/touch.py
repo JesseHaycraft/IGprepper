@@ -13,6 +13,8 @@ from android.view import View
 from java import dynamic_proxy, jclass
 from PIL import Image
 
+from . import ui
+
 Bitmap = jclass("android.graphics.Bitmap")
 BitmapConfig = jclass("android.graphics.Bitmap$Config")
 ByteBuffer = jclass("java.nio.ByteBuffer")
@@ -64,7 +66,7 @@ def listen(view, handler, on_error) -> Listener:
     """Have `handler(kind, points)` called for fingers on `view`. Returns the
     listener, which the caller must keep hold of for as long as it matters."""
     listener = Listener(handler, on_error)
-    view.setOnTouchListener(listener)
+    ui.native(view).setOnTouchListener(listener)
     return listener
 
 
@@ -74,6 +76,7 @@ def shown_at(view) -> tuple[float, float, float]:
     The view is usually larger than the picture, which is scaled to fit and
     centred. Android has already worked out where; this asks it.
     """
+    view = ui.native(view)
     drawable = view.getDrawable()
     rect = RectF(0, 0, drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight())
     view.getImageMatrix().mapRect(rect)
@@ -105,4 +108,4 @@ class Canvas:
         # ARGB_8888 is stored as R, G, B, A in memory, despite the name.
         pixels = image.convert("RGBA").tobytes()
         self.bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
-        view.setImageBitmap(self.bitmap)
+        ui.native(view).setImageBitmap(self.bitmap)

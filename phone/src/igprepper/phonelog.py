@@ -4,8 +4,7 @@ There is no cable to the phone, so this is the only way to see what happened
 on it. Every line is handed to a file straight away, so a crash still leaves
 everything up to that point. Where that file lives is the platform's
 business: on Android it goes where the Files app can reach it
-(`androidlog.py`); anywhere else it is a plain file, which keeps this module
-testable.
+(`native/android/log.py`).
 
 Nothing here lists what is already in anyone's storage: it records only what
 the app itself did.
@@ -16,36 +15,12 @@ Nothing here is Android-specific; the desktop test suite runs it.
 from __future__ import annotations
 
 import sys
-import tempfile
 import traceback
 from datetime import datetime
-from pathlib import Path
+
+from .native import log as files
 
 PREFIX = "igprepper-log-"
-
-
-class PlainFile:
-    """A log file like any other file."""
-
-    def __init__(self, name: str) -> None:
-        self.path = Path(tempfile.gettempdir()) / name
-        self.location = str(self.path)
-
-    def write(self, text: str, everything) -> None:
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(text)
-
-    def prune(self, keep: int) -> int:
-        return 0
-
-
-def _new_file(name: str):
-    try:
-        from .androidlog import DownloadsFile
-    except ImportError:
-        # Not on a phone.
-        return PlainFile(name)
-    return DownloadsFile(name)
 
 
 class PhoneLog:
@@ -58,7 +33,7 @@ class PhoneLog:
 
         name = f"{PREFIX}{datetime.now():%Y%m%d-%H%M%S}.txt"
         try:
-            self._sink = _new_file(name)
+            self._sink = files.LogFile(name)
             self.location = self._sink.location
         except Exception:
             # Still usable: lines stay in memory.
@@ -74,7 +49,7 @@ class PhoneLog:
         """
         if self._sink is None:
             return 0
-        removed = self._sink.prune(keep)
+        removed = self._sink.prune(keep, PREFIX)
         if removed:
             self.write(f"Removed {removed} old log file(s); the newest {keep} are kept.")
         return removed

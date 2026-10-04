@@ -38,6 +38,18 @@ class Entry:
         return self.mime in PHOTO_TYPES or self.name.lower().endswith(PHOTO_ENDINGS)
 
 
+class StorageError(RuntimeError):
+    """The storage app refused or failed an operation."""
+
+
+@dataclass
+class Listing:
+    entries: list[Entry]
+    # True when the storage app handed over what it had so far and is still
+    # fetching the rest, as cloud storage does for a large folder.
+    loading: bool = False
+
+
 def ordered(entries: list[Entry]) -> list[Entry]:
     """Folders first, by name; then files, newest first.
 

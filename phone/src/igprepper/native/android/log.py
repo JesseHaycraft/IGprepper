@@ -14,15 +14,13 @@ from java import jarray, jclass
 from java.lang import String
 from org.beeware.android import MainActivity
 
-from .phonelog import PREFIX
-
 ContentUris = jclass("android.content.ContentUris")
 Downloads = jclass("android.provider.MediaStore$Downloads")
 
 FOLDER = "IGprepper"
 
 
-class DownloadsFile:
+class LogFile:
     def __init__(self, name: str) -> None:
         values = ContentValues()
         values.put("_display_name", name)
@@ -56,14 +54,16 @@ class DownloadsFile:
         finally:
             stream.close()
 
-    def prune(self, keep: int) -> int:
+    def prune(self, keep: int, prefix: str) -> int:
+        """Delete this app's older logs, whose names begin with `prefix`,
+        leaving the newest `keep`. Returns how many went."""
         # Android shows an app only the downloads it made itself, and the
         # name and folder are checked as well: nothing else can match.
         cursor = self.resolver.query(
             Downloads.EXTERNAL_CONTENT_URI,
             jarray(String)(["_id", "_display_name"]),
             "relative_path LIKE ? AND _display_name LIKE ?",
-            jarray(String)([f"Download/{FOLDER}/%", f"{PREFIX}%.txt"]),
+            jarray(String)([f"Download/{FOLDER}/%", f"{prefix}%.txt"]),
             "_display_name DESC",
         )
         if cursor is None:

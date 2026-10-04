@@ -12,18 +12,18 @@ This module only imports on Android.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 
 from android.content import ContentValues, Intent
 from java import jarray, jbyte, jclass
 from java.lang import String
 from org.beeware.android import MainActivity
 
-from . import words
-from .entries import DIR_MIME, Entry
+from ... import words
+from ...entries import DIR_MIME, Entry, Listing, StorageError
 
 DocumentsContract = jclass("android.provider.DocumentsContract")
 GalleryImages = jclass("android.provider.MediaStore$Images$Media")
+Integer = jclass("java.lang.Integer")
 Point = jclass("android.graphics.Point")
 ThumbnailUtils = jclass("android.media.ThumbnailUtils")
 
@@ -37,18 +37,6 @@ LOCAL_STORAGE = "com.android.externalstorage.documents"
 _COLUMNS = [
     "document_id", "_display_name", "mime_type", "_size", "flags", "last_modified",
 ]
-
-
-class StorageError(RuntimeError):
-    """The storage app refused or failed an operation."""
-
-
-@dataclass
-class Listing:
-    entries: list[Entry]
-    # True when the storage app handed over what it had so far and is still
-    # fetching the rest, as cloud storage does for a large folder.
-    loading: bool = False
 
 
 def resolver():
@@ -270,6 +258,17 @@ def create_file(tree, parent_id: str, name: str, mime: str) -> Entry:
 
 # --- reading and writing ------------------------------------------------------
 
+def delete(tree, doc_id: str) -> None:
+    """Remove a file. Only ever asked of one this app has just created and
+    could not finish writing."""
+    try:
+        gone = DocumentsContract.deleteDocument(resolver(), _doc_uri(tree, doc_id))
+    except Exception as problem:
+        raise StorageError(f"The storage app would not delete the file: {problem}")
+    if not gone:
+        raise StorageError("The storage app would not delete the file")
+
+
 def write_bytes(tree, doc_id: str, data: bytes, chunk: int = 1 << 20) -> None:
     stream = resolver().openOutputStream(_doc_uri(tree, doc_id), "w")
     if stream is None:
@@ -313,14 +312,24 @@ def save_to_gallery(name: str, jpeg: bytes) -> None:
     values.put("_display_name", name)
     values.put("mime_type", "image/jpeg")
     values.put("relative_path", "Pictures/IGprepper")
+    # Marked as unfinished, which keeps it out of the gallery until every
+    # byte is in. A photo that fails part-way is then never seen at all.
+    values.put("is_pending", Integer(1))
     uri = resolver().insert(GalleryImages.EXTERNAL_CONTENT_URI, values)
     if uri is None:
         raise StorageError("Android refused to add the photo to the gallery")
-    stream = resolver().openOutputStream(uri, "w")
-    if stream is None:
-        raise StorageError("Android would not open the gallery for writing")
     try:
-        stream.write(jpeg)
-        stream.flush()
-    finally:
-        stream.close()
+        stream = resolver().openOutputStream(uri, "w")
+        if stream is None:
+            raise StorageError("Android would not open the gallery for writing")
+        try:
+            stream.write(jpeg)
+            stream.flush()
+        finally:
+            stream.close()
+        finished = ContentValues()
+        finished.put("is_pending", Integer(0))
+        resolver().update(uri, finished, None, None)
+    except Exception:
+        resolver().delete(uri, None, None)
+        raise

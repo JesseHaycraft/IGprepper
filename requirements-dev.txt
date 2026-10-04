@@ -1,3 +1,6 @@
 -r requirements.txt
 pytest>=8
 pyinstaller>=6
+# The phone app's screens are tested on the toolkit's own stand-in for a screen.
+toga-core==0.5.7
+toga-dummy==0.5.7

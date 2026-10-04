@@ -24,6 +24,7 @@ import platform
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 import toga
 from PIL import Image
@@ -35,19 +36,9 @@ from igprep.core.preview import PROXY_MAX
 from igprep.core.render import RESAMPLE
 from igprep.core.settings import Framing
 
-from . import (
-    androidimage,
-    androidui,
-    framing,
-    gestures,
-    icons,
-    places,
-    storage,
-    touch,
-    views,
-    words,
-)
+from . import framing, gestures, icons, places, views, words
 from .browser import Browser
+from .native import decoder, storage, touch, ui
 from .palette import ACCENT, BUTTON_LOOKS, DIM
 from .phonelog import PhoneLog
 
@@ -123,11 +114,12 @@ class IGprepper(toga.App):
         self.guide_timer = None
         self.guide_seconds = GUIDE_SECONDS
 
+        self.controls_free = True
         self.looks: dict[toga.Button, Look] = {}
         self.drawn_icons: dict[tuple[str, str], object] = {}
         self.icon_bitmaps: dict[tuple[str, str], object] = {}
-        self.back = androidui.BackButton(self.on_back)
-        self.views = views.Views(self.paths.data / "views.json")
+        self.back = ui.BackButton(self.on_back)
+        self.views = views.Views(self.data_dir() / "views.json")
         self.split_from: tuple[int, int] | None = None
         self.split_to: float | None = None
         self.split_due = False
@@ -140,7 +132,7 @@ class IGprepper(toga.App):
         self.main_window.show()
 
         self.guard("describing the phone", self.report_environment)
-        self.guard("darkening the system bars", androidui.darken_system_bars)
+        self.guard("darkening the system bars", ui.darken_system_bars)
         self.guard("watching for the app being returned to", self.watch_returns)
         self.refresh_controls()
 
@@ -186,15 +178,15 @@ class IGprepper(toga.App):
 
     def make_divider(self) -> None:
         # Kept on the app so it is not swept away while Android still holds it.
-        self.divider_listener = androidui.drag_handle(
-            self.divider._impl.native, self.split_started, self.split_moved,
+        self.divider_listener = ui.drag_handle(
+            self.divider, self.split_started, self.split_moved,
             self.split_ended, lambda: self.log.exception("dragging the divider"),
         )
 
     def list_heights(self) -> tuple[int, int]:
         """How tall each list is on screen at the moment, in its pixels."""
         return tuple(
-            androidui.height(browser.holder._impl.native) for browser in self.browsers
+            ui.height(browser.holder) for browser in self.browsers
         )
 
     def apply_split(self, share: float) -> None:
@@ -210,7 +202,7 @@ class IGprepper(toga.App):
         if self.split_from is None:
             return
         upper, lower = self.split_from
-        height = views.divide(upper, lower, down, androidui.dp(LEAST_LIST_DP))
+        height = views.divide(upper, lower, down, ui.dp(LEAST_LIST_DP))
         if height is None:
             return
         self.split_to = height / (upper + lower)
@@ -233,7 +225,7 @@ class IGprepper(toga.App):
     # --- coming back to the app ---------------------------------------------------
 
     def watch_returns(self) -> None:
-        self.returns = androidui.Returns(
+        self.returns = ui.Returns(
             self.returned, lambda: self.log.exception("noticing a return to the app")
         )
 
@@ -326,7 +318,7 @@ class IGprepper(toga.App):
         for menu in (self.ratio_select, self.fit_select):
             self.guard(
                 "outlining a menu",
-                lambda m=menu: androidui.outline_dropdown(m._impl.native, ACCENT),
+                lambda m=menu: ui.outline_dropdown(m, ACCENT),
             )
 
         self.cancel_btn = self.button(
@@ -373,10 +365,9 @@ class IGprepper(toga.App):
         self.guard("clearing out old logs", lambda: self.log.prune(KEPT_LOGS))
         self.log.write("")
         self.log.write("=== Ready ===")
-        if androidui.launched_with("selftest"):
-            from . import selftest
-
-            await selftest.run(self)
+        check = ui.self_test()
+        if check is not None:
+            await check(self)
 
     # --- plumbing ---------------------------------------------------------
 
@@ -418,7 +409,7 @@ class IGprepper(toga.App):
         log.section(f"IGprepper phone app, version {self.version}")
         log.write(f"Log file: {log.location}")
 
-        for line in androidui.device():
+        for line in ui.device():
             log.write(line)
         log.write(f"Python {sys.version.split()[0]} on {platform.machine()}")
         log.write(
@@ -436,7 +427,7 @@ class IGprepper(toga.App):
         """
         self.said = text
         self.log.write(f"Shown briefly: {logged or text}")
-        self.guard("showing a brief message", lambda: androidui.toast(text))
+        self.guard("showing a brief message", lambda: ui.toast(text))
 
     async def tell(self, title: str, message: str, logged: str | None = None) -> None:
         """A message that has to be acknowledged."""
@@ -462,7 +453,7 @@ class IGprepper(toga.App):
         made = toga.Button(text, on_press=on_press, style=Pack(**style))
         self.looks[made] = Look(kind, text, icon, icon_after)
         self.guard(
-            "shaping a button", lambda: androidui.plain_button(made._impl.native)
+            "shaping a button", lambda: ui.plain_button(made)
         )
         self.dress(made, True)
         return made
@@ -472,7 +463,7 @@ class IGprepper(toga.App):
         # name, and would quietly replace this.
         key = (name, colour)
         if key not in self.drawn_icons:
-            self.drawn_icons[key] = androidui.drawable(
+            self.drawn_icons[key] = ui.drawable(
                 icons.icon(name, ICON_PX, colour), ICON_DP
             )
         return self.drawn_icons[key]
@@ -481,7 +472,7 @@ class IGprepper(toga.App):
         """An icon as a plain picture, for a row of a list."""
         key = (name, colour)
         if key not in self.icon_bitmaps:
-            self.icon_bitmaps[key] = androidui.bitmap(
+            self.icon_bitmaps[key] = ui.bitmap(
                 icons.icon(name, ICON_PX, colour)
             )
         return self.icon_bitmaps[key]
@@ -499,7 +490,7 @@ class IGprepper(toga.App):
             icon = (
                 self.drawn_icon(look.icon, colours["color"]) if look.icon else None
             )
-            androidui.label(button._impl.native, look.text, icon, look.icon_after)
+            ui.label(button, look.text, icon, look.icon_after)
 
         self.guard("labelling a button", label)
         button.refresh()
@@ -535,11 +526,25 @@ class IGprepper(toga.App):
             self.switch(turn, free and editing)
         self.switch(self.cancel_btn, free)
         self.switch(self.save_btn, free and editing)
+        if free != self.controls_free:
+            # The menus, the slider and the switch too. A save takes its
+            # settings as it starts; changing them part-way would only alter
+            # what the screen says.
+            self.controls_free = free
+            for control in (
+                self.ratio_select, self.fit_select, self.border_slider,
+                self.gallery_switch,
+            ):
+                control.enabled = free
 
     # --- the two folders ------------------------------------------------------------
 
+    def data_dir(self):
+        """Where the app keeps what it remembers, private to itself."""
+        return self.paths.data
+
     def places_file(self):
-        return self.paths.data / "places.json"
+        return self.data_dir() / "places.json"
 
     async def restore_places(self) -> None:
         """Open each side where the last session left it."""
@@ -626,7 +631,7 @@ class IGprepper(toga.App):
 
     def load_proxy(self, address) -> tuple[Image.Image, tuple[int, int]]:
         data = storage.read_uri(address)
-        image = framing.prepare(data, androidimage.decode_to_srgb)
+        image = framing.prepare(data, decoder.decode_to_srgb)
         size = image.size
         # Shrunk where it is. The full-size photo is not wanted again until
         # saving, and a copy of it is a great deal of memory.
@@ -765,15 +770,13 @@ class IGprepper(toga.App):
     def listen_for_fingers(self) -> None:
         # Kept on the app so it is not swept away while Android still holds it.
         self.finger_listener = touch.listen(
-            self.preview_view._impl.native, self.on_fingers,
+            self.preview_view, self.on_fingers,
             lambda: self.log.exception("following a finger"),
         )
         self.live = touch.Canvas()
 
     def hold(self) -> Held:
-        centre_x, centre_y, shown_width = touch.shown_at(
-            self.preview_view._impl.native
-        )
+        centre_x, centre_y, shown_width = touch.shown_at(self.preview_view)
         chosen = self.current_framing()
         return Held(
             centre_x, centre_y, framing.OUTPUT_WIDTH / shown_width,
@@ -841,7 +844,7 @@ class IGprepper(toga.App):
             )
             if self.guides_showing:
                 image = framing.guided(image, chosen)
-            self.live.show(self.preview_view._impl.native, image)
+            self.live.show(self.preview_view, image)
             self.quick_frames += 1
             self.quick_seconds += time.perf_counter() - started
         except Exception:
@@ -854,8 +857,11 @@ class IGprepper(toga.App):
         asyncio.ensure_future(self.cancel_editing())
 
     async def cancel_editing(self, widget=None) -> None:
-        if self.busy:
-            return
+        # Exclusive, so that a second press while the question is still on
+        # screen does not ask it again.
+        await self.exclusively("leaving the editor", self._cancel_editing())
+
+    async def _cancel_editing(self) -> None:
         if self.placements and not await self.ask(
             "Discard changes?",
             "The photos you have moved or turned will be put back as they were.",
@@ -881,9 +887,16 @@ class IGprepper(toga.App):
         here = target.here if target.tree is not None else None
         folder = target.folder_name
         total = len(self.picked)
-        saved, pictures = await self.work(
+        taken, whole = set(), True
+        if target.tree is not None:
+            # The names already there, from the whole folder: a large one in
+            # cloud storage arrives in instalments.
+            self.hint_label.text = "Checking the output folder\u2026"
+            found, whole = await target.whole_listing()
+            taken = {entry.name for entry in found}
+        saved, pictures, stranded = await self.work(
             self.save_framed_now, list(self.picked), self.current_framing(),
-            dict(self.placements), to_gallery, target.tree, here,
+            dict(self.placements), to_gallery, target.tree, here, taken, whole,
         )
         # Done with: what was checked has been processed.
         self.source.uncheck_all()
@@ -914,10 +927,16 @@ class IGprepper(toga.App):
                 logged=f"saved {words.photos(saved)}.",
             )
         else:
+            left = ""
+            if stranded:
+                left = (
+                    " An unfinished file was left in the output folder, because "
+                    "the storage app would not remove it."
+                )
             await self.tell(
                 "Not everything was saved",
-                f"{saved} of {words.photos(total)} saved. The details are in "
-                "the log in Download/IGprepper.",
+                f"{saved} of {words.photos(total)} saved.{left} The details "
+                "are in the log in Download/IGprepper.",
             )
 
     def show_progress(self, number: int, total: int) -> None:
@@ -925,12 +944,17 @@ class IGprepper(toga.App):
         self.hint_label.text = f"Saving {number} of {total}\u2026"
 
     def save_framed_now(
-        self, picked, chosen: Framing, placements, to_gallery, tree, here
-    ) -> tuple[int, dict]:
+        self, picked, chosen: Framing, placements, to_gallery, tree, here,
+        taken, whole: bool,
+    ) -> tuple[int, dict, int]:
         """One photo at a time, start to finish, so memory stays flat.
 
-        Returns how many were saved, and a small picture of each file put in
-        the folder, by the name the storage app knows it by.
+        `taken` is the names already in the folder, and `whole` whether that
+        is known to be all of them.
+
+        Returns how many were saved; a small picture of each file put in the
+        folder, by the name the storage app knows it by; and how many
+        unfinished files could not be cleared away.
         """
         log = self.log
         log.section("Saving framed photos")
@@ -939,29 +963,47 @@ class IGprepper(toga.App):
             f"To the folder: {'yes' if tree is not None else 'no'}. "
             f"To the gallery: {'yes' if to_gallery else 'no'}."
         )
-        taken = set()
-        if tree is not None:
-            taken = {entry.name for entry in storage.children(tree, here)}
+        taken = set(taken)
+        stamp = None
+        if not whole:
+            # A name could be taken by a file not yet heard of. The time of
+            # day in each new name puts that beyond doubt.
+            stamp = datetime.now().strftime("%H%M%S")
+            log.write(
+                "The output folder was still loading, so each name carries "
+                "the time to keep it clear of anything not yet listed."
+            )
 
-        saved = 0
+        saved = stranded = 0
         pictures: dict[str, Image.Image] = {}
         for number, (address, name) in enumerate(picked, start=1):
             self.loop.call_soon_threadsafe(self.show_progress, number, len(picked))
             try:
                 started = time.perf_counter()
                 image = framing.prepare(
-                    storage.read_uri(address), androidimage.decode_to_srgb
+                    storage.read_uri(address), decoder.decode_to_srgb
                 )
                 opened = time.perf_counter()
                 placement = placements.get(number - 1, g.Placement())
                 result = framing.frame(image, chosen, placement)
                 framed = time.perf_counter()
 
-                out = framing.output_name(name, taken)
+                out = framing.output_name(name, taken, stamp)
                 taken.add(out)
                 if tree is not None:
                     entry = storage.create_file(tree, here, out, "image/jpeg")
-                    storage.write_bytes(tree, entry.doc_id, result.jpeg)
+                    try:
+                        storage.write_bytes(tree, entry.doc_id, result.jpeg)
+                    except Exception:
+                        # The file exists and is empty or cut short. It is
+                        # this app's own, made a moment ago: take it away.
+                        try:
+                            storage.delete(tree, entry.doc_id)
+                            log.write("The unfinished file was removed.")
+                        except Exception:
+                            stranded += 1
+                            log.exception("removing the unfinished file")
+                        raise
                     pictures[entry.doc_id] = framing.small_copy(result.jpeg)
                 if to_gallery:
                     storage.save_to_gallery(out, result.jpeg)
@@ -987,7 +1029,7 @@ class IGprepper(toga.App):
             except Exception:
                 log.exception(f"framing photo {number} of {len(picked)}")
         log.write("Framed photos finished.")
-        return saved, pictures
+        return saved, pictures, stranded
 
 
 def main() -> IGprepper:
