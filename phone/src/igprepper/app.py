@@ -398,7 +398,9 @@ class IGprepper(toga.App):
         self.dress(made, True)
         return made
 
-    def icon(self, name: str, colour: str):
+    def drawn_icon(self, name: str, colour: str):
+        # Not called `icon`: the toolkit keeps the app's own icon under that
+        # name, and would quietly replace this.
         key = (name, colour)
         if key not in self.drawn_icons:
             self.drawn_icons[key] = androidui.drawable(
@@ -416,7 +418,9 @@ class IGprepper(toga.App):
         button.style.update(**colours)
 
         def label() -> None:
-            icon = self.icon(look.icon, colours["color"]) if look.icon else None
+            icon = (
+                self.drawn_icon(look.icon, colours["color"]) if look.icon else None
+            )
             androidui.label(button._impl.native, look.text, icon)
 
         self.guard("labelling a button", label)
