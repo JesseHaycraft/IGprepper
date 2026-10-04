@@ -24,6 +24,7 @@ EditText = jclass("android.widget.EditText")
 FrameLayout = jclass("android.widget.FrameLayout")
 Gravity = jclass("android.view.Gravity")
 ImageSpan = jclass("android.text.style.ImageSpan")
+InsetDrawable = jclass("android.graphics.drawable.InsetDrawable")
 InputType = jclass("android.text.InputType")
 SpannableString = jclass("android.text.SpannableString")
 Spanned = jclass("android.text.Spanned")
@@ -33,6 +34,9 @@ WindowLayout = jclass("android.view.WindowManager$LayoutParams")
 
 # Stands in the text where an icon is to be drawn.
 _PLACEHOLDER = "￼"
+# About the height of a line of button text. An icon is told it is this
+# tall, however tall it is drawn.
+_LINE_DP = 13
 # The phone's Back gesture can only be intercepted from Android 13.
 _MIN_SDK_FOR_BACK = 33
 
@@ -53,9 +57,15 @@ def drawable(image: Image.Image, size_dp: float):
     image.save(data, "PNG")
     raw = data.getvalue()
     bitmap = BitmapFactory.decodeByteArray(raw, 0, len(raw))
-    result = BitmapDrawable(activity().getResources(), bitmap)
+    picture = BitmapDrawable(activity().getResources(), bitmap)
     side = dp(size_dp)
-    result.setBounds(0, 0, side, side)
+    # An icon taller than the text beside it makes Android grow the line
+    # upwards to hold it, which leaves the words sitting low. So the icon
+    # claims no more height than the text has, and overhangs that evenly
+    # above and below: drawn full size, centred on the words.
+    overhang = max(0, (side - dp(_LINE_DP)) // 2)
+    result = InsetDrawable(picture, 0, -overhang, 0, -overhang)
+    result.setBounds(0, 0, side, side - 2 * overhang)
     return result
 
 

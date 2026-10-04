@@ -35,14 +35,14 @@ def verdict(app, ok: bool, text: str) -> None:
     app.log.write(f"{'PASS' if ok else 'FAIL'}  {text}")
 
 
-async def hold(app, name: str) -> None:
+async def hold(app, name: str, seconds: float = 10) -> None:
     """Stand still while the emulator run photographs the screen.
 
     Nothing else can show whether the app looks right before a build is
     published.
     """
     app.log.write(f"SCREENSHOT {name}")
-    await asyncio.sleep(10)
+    await asyncio.sleep(seconds)
 
 
 async def until(condition, seconds: float = 15) -> bool:
@@ -74,7 +74,9 @@ async def run(app) -> None:
         log.write("Image tests finished: " + ("all passed." if ok else "something FAILED."))
 
         if app.tree is None:
-            await hold(app, "home-first-run")
+            # The first thing asked for, and the emulator's camera may
+            # not be ready yet.
+            await hold(app, "home-first-run", 30)
         await app.choose_folder(initial=storage.local_folder_uri(FOLDER))
         if app.tree is None:
             log.write("FAIL  No folder was granted, so nothing else can be tested.")
