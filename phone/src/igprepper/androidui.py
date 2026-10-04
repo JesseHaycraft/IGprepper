@@ -85,8 +85,9 @@ def plain_button(native) -> None:
     )
 
 
-def label(native, text: str, icon=None) -> None:
-    """Set a button's label, with an icon before it if one is given.
+def label(native, text: str, icon=None, after: bool = False) -> None:
+    """Set a button's label, with an icon before it if one is given, or
+    `after` it.
 
     The icon is placed in the text itself, so it stays beside the words
     rather than at the far edge of a wide button.
@@ -94,12 +95,26 @@ def label(native, text: str, icon=None) -> None:
     if icon is None:
         native.setText(text)
         return
-    content = SpannableString(f"{_PLACEHOLDER}  {text}" if text else _PLACEHOLDER)
+    if not text:
+        written, at = _PLACEHOLDER, 0
+    elif after:
+        written, at = f"{text}  {_PLACEHOLDER}", len(text) + 2
+    else:
+        written, at = f"{_PLACEHOLDER}  {text}", 0
+    content = SpannableString(written)
     content.setSpan(
-        ImageSpan(icon, ImageSpan.ALIGN_CENTER), 0, 1,
+        ImageSpan(icon, ImageSpan.ALIGN_CENTER), at, at + 1,
         Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
     )
     native.setText(content)
+
+
+def bitmap(image: Image.Image):
+    """A picture Android can put in a view."""
+    data = io.BytesIO()
+    image.save(data, "PNG")
+    raw = data.getvalue()
+    return BitmapFactory.decodeByteArray(raw, 0, len(raw))
 
 
 def align_start(native) -> None:

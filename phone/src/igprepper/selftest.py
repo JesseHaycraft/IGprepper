@@ -22,13 +22,18 @@ from PIL import Image
 
 from igprep.core import geometry as g
 
-from . import androidimage, androidui, framing, imagetests, storage, touch
+from . import androidimage, androidui, framing, imagetests, places, storage, touch
 from .app import FIT_CHOICES, GUIDE_SECONDS
 from .fixtures import FIXTURES
 
 FOLDER = "Download/IGprepper"
 LARGE_FILE_MB = 20
 TRIAL_FOLDER = "CI test & trial"
+MANY_FOLDER = "Many"
+MANY = 150
+SMALL_PHOTO = "igprepper-test-photo.jpg"
+LARGE_PHOTO = "igprepper-test-photo-large.jpg"
+TEXT_FILE = "igprepper-test-small.txt"
 
 
 def verdict(app, ok: bool, text: str) -> None:
@@ -60,8 +65,28 @@ def shown_text(button) -> str:
     return str(button._impl.native.getText()).replace("￼", "").strip()
 
 
+def is_on(button) -> bool:
+    """Asked of Android itself, not of this app's own record of it."""
+    return bool(button._impl.native.isEnabled())
+
+
 def choose(selection, choices: dict, wanted: str) -> None:
     selection.value = next(label for label, value in choices.items() if value == wanted)
+
+
+def names(browser) -> list[str]:
+    return [entry.name for entry in browser.entries]
+
+
+def press_row(browser, name: str) -> None:
+    """Press a row of a list the way a finger would."""
+    position = names(browser).index(name)
+    browser.files.list.performItemClick(None, position, position)
+
+
+async def enter(app, browser, name: str) -> bool:
+    press_row(browser, name)
+    return await until(lambda: browser.trail[-1][1] == name and not app.busy)
 
 
 async def run(app) -> None:
@@ -73,79 +98,67 @@ async def run(app) -> None:
         log.write("")
         log.write("Image tests finished: " + ("all passed." if ok else "something FAILED."))
 
-        if app.tree is None:
-            # The first thing asked for, and the emulator's camera may
-            # not be ready yet.
+        if app.source.tree is None and app.target.tree is None:
+            # The first thing asked for, and the emulator's camera may not be
+            # ready yet.
             await hold(app, "home-first-run", 30)
-        await app.choose_folder(initial=storage.local_folder_uri(FOLDER))
-        if app.tree is None:
+        await app.target.choose(initial=storage.local_folder_uri(FOLDER))
+        if app.target.tree is None:
             log.write("FAIL  No folder was granted, so nothing else can be tested.")
             return
 
-        await folders(app)
+        await output_side(app)
         await test_files(app)
+        await input_side(app)
         await editor(app)
         await leaving(app)
-
-        await app.go_up()
-        held = storage.persisted_folder() is not None
-        verdict(app, held, "Folder access is recorded as lasting beyond this session.")
+        remembered(app)
     except Exception:
         log.exception("running the self-test")
     finally:
         log.write("=== Self-test finished ===")
 
 
-# --- the first screen -----------------------------------------------------------
+# --- the output folder --------------------------------------------------------
 
-async def folders(app) -> None:
-    log = app.log
-    log.section("Self-test: folders")
+async def output_side(app) -> None:
+    log, target = app.log, app.target
+    log.section("Self-test: the output folder")
+    # Back to the granted folder, wherever an earlier run left things.
+    while len(target.trail) > 1:
+        await target.up()
 
-    await app.create_folder(TRIAL_FOLDER)
-    await app.create_folder(TRIAL_FOLDER)
-    matching = [e for e in app.subfolders if e.name == TRIAL_FOLDER]
+    await target.create_folder(TRIAL_FOLDER)
+    await target.create_folder(TRIAL_FOLDER)
+    matching = names(target).count(TRIAL_FOLDER)
     verdict(
-        app, len(matching) == 1 and app.said.startswith("Already there"),
-        f"Asked twice for the same folder name: {len(matching)} exists, and the "
+        app, matching == 1 and app.said.startswith("Already there"),
+        f"Asked twice for the same folder name: {matching} exists, and the "
         "second request was turned down with a message.",
     )
 
-    labels = [shown_text(row) for row in app.folder_rows]
+    opened = await enter(app, target, TRIAL_FOLDER)
     verdict(
-        app, len(labels) == len(app.subfolders) and TRIAL_FOLDER in labels,
-        f"The list shows {len(labels)} folder(s), the new one among them.",
-    )
-
-    # Open it the way a finger would: by pressing its row.
-    row = app.folder_rows[labels.index(TRIAL_FOLDER)]
-    row._impl.native.performClick()
-    opened = await until(lambda: app.trail[-1][1] == TRIAL_FOLDER and not app.busy)
-    verdict(
-        app, opened and app.folder_label.text == TRIAL_FOLDER
-        and bool(app.up_btn._impl.native.isEnabled()),
-        f"Pressing a folder opened it: the heading reads {app.folder_label.text!r} "
+        app, opened and target.path_label.text.endswith(TRIAL_FOLDER)
+        and is_on(target.up_btn),
+        f"Pressing a folder opened it: the path ends {target.path_label.text[-24:]!r} "
         "and Up is available.",
     )
 
     # New folder, through the pop-up.
-    await app.new_folder()
-    dialog, field = app.name_dialog
+    await target.new_folder()
+    dialog, field = target.name_dialog
     field.setText("Edits")
     await hold(app, "new-folder")
     androidui.press_confirm(dialog)
-    made = await until(
-        lambda: any(e.name == "Edits" for e in app.subfolders) and not app.busy
-    )
+    made = await until(lambda: "Edits" in names(target) and not app.busy)
     verdict(app, made, "Typing a name and pressing Create made the folder.")
-    await hold(app, "home")
 
-    labels = [shown_text(row) for row in app.folder_rows]
-    app.folder_rows[labels.index("Edits")]._impl.native.performClick()
-    await until(lambda: app.trail[-1][1] == "Edits" and not app.busy)
+    await target.create_folder(MANY_FOLDER)
+    await enter(app, target, "Edits")
 
 
-def capabilities(log, entry: storage.Entry) -> None:
+def capabilities(log, entry) -> None:
     found = entry.capabilities()
     allowed = [name for name, yes in found.items() if yes]
     refused = [name for name, yes in found.items() if not yes]
@@ -156,8 +169,24 @@ def capabilities(log, entry: storage.Entry) -> None:
 
 
 async def test_files(app) -> None:
-    await app.work(write_test_files, app.log, app.tree, app.here)
-    await app.refresh_listing()
+    target = app.target
+    await app.work(write_test_files, app.log, target.tree, target.here)
+    above = await app.work(storage.children, target.tree, target.trail[-2][0])
+    many = next(e for e in above if e.name == MANY_FOLDER)
+    await app.work(write_many, app.log, target.tree, many.doc_id)
+    await target.reload()
+
+
+def write_many(log, tree, parent: str) -> None:
+    """A folder with a great many files in it, to see the list cope."""
+    have = len(storage.children(tree, parent))
+    started = time.perf_counter()
+    for number in range(have, MANY):
+        storage.create_file(tree, parent, f"photo-{number:03}.jpg", "image/jpeg")
+    log.write(
+        f"A folder of {MANY} empty files: {MANY - have} created in "
+        f"{time.perf_counter() - started:.1f} s."
+    )
 
 
 def write_test_files(log, tree, parent: str) -> None:
@@ -165,11 +194,10 @@ def write_test_files(log, tree, parent: str) -> None:
     log.section("Self-test: writing files")
     capabilities(log, storage.describe(tree, parent))
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    name = "igprepper-test-small.txt"
 
     try:
         payload = f"IGprepper test file, written {stamp}\n".encode()
-        entry = storage.create_file(tree, parent, name, "text/plain")
+        entry = storage.create_file(tree, parent, TEXT_FILE, "text/plain")
         storage.write_bytes(tree, entry.doc_id, payload)
         back = storage.read_bytes(tree, entry.doc_id)
         ok = back == payload
@@ -182,18 +210,25 @@ def write_test_files(log, tree, parent: str) -> None:
     except Exception:
         log.exception("writing the small test file")
 
-    try:
-        jpeg = imagetests.framed_test_jpeg()
-        entry = storage.create_file(tree, parent, "igprepper-test-photo.jpg", "image/jpeg")
-        storage.write_bytes(tree, entry.doc_id, jpeg)
-        reported = storage.describe(tree, entry.doc_id).size
-        ok = reported in (None, len(jpeg))
-        log.write(
-            f"{'PASS' if ok else 'FAIL'}  Photo {entry.name!r}: wrote "
-            f"{len(jpeg)} bytes; the storage app reports {reported}"
-        )
-    except Exception:
-        log.exception("writing the test photo")
+    large = io.BytesIO()
+    imagetests.make_test_photo(3000, 2000).save(large, "JPEG", quality=90)
+    for name, jpeg in (
+        (SMALL_PHOTO, imagetests.framed_test_jpeg()),
+        (LARGE_PHOTO, large.getvalue()),
+    ):
+        try:
+            entry = storage.create_file(tree, parent, name, "image/jpeg")
+            storage.write_bytes(tree, entry.doc_id, jpeg)
+            reported = storage.describe(tree, entry.doc_id).size
+            ok = reported in (None, len(jpeg))
+            log.write(
+                f"{'PASS' if ok else 'FAIL'}  Photo {entry.name!r}: wrote "
+                f"{len(jpeg)} bytes; the storage app reports {reported}"
+            )
+            # The list puts the newest first; make sure one is newer.
+            time.sleep(1.2)
+        except Exception:
+            log.exception("writing a test photo")
 
     try:
         blob = os.urandom(1 << 20) * LARGE_FILE_MB
@@ -217,11 +252,105 @@ def write_test_files(log, tree, parent: str) -> None:
         log.exception("writing the large test file")
 
 
+# --- the input folder ---------------------------------------------------------
+
+async def input_side(app) -> None:
+    log, source, target = app.log, app.source, app.target
+    log.section("Self-test: the input folder")
+    await source.choose(initial=storage.local_folder_uri(FOLDER))
+    if source.tree is None:
+        log.write("FAIL  No input folder was granted.")
+        return
+    while len(source.trail) > 1:
+        await source.up()
+    verdict(
+        app, source.new_btn is None and not source.creates,
+        "The input side has no New folder button, and asked for read access only.",
+    )
+    await enter(app, source, TRIAL_FOLDER)
+
+    # A long folder: only the rows on screen should exist.
+    started = time.perf_counter()
+    await enter(app, source, MANY_FOLDER)
+    took = time.perf_counter() - started
+    view = source.files.list
+    await asyncio.sleep(0.5)
+    drawn = view.getChildCount()
+    view.setSelection(MANY - 1)
+    await asyncio.sleep(1)
+    verdict(
+        app, len(source.entries) == MANY and 0 < drawn < 30
+        and view.getLastVisiblePosition() == MANY - 1,
+        f"A folder of {len(source.entries)} files opened in {took:.2f} s with "
+        f"{drawn} rows drawn, and scrolled to the last.",
+    )
+    await source.up()
+
+    await enter(app, source, "Edits")
+    listed = names(source)
+    verdict(
+        app, {SMALL_PHOTO, LARGE_PHOTO, TEXT_FILE} <= set(listed)
+        and listed.index(LARGE_PHOTO) < listed.index(SMALL_PHOTO),
+        f"The folder lists {len(listed)} files, the newer photo above the older.",
+    )
+
+    press_row(source, TEXT_FILE)
+    verdict(
+        app, not source.checked and "not a photo" in app.said
+        and not is_on(app.process_btn),
+        "Pressing a text file checked nothing, said why, and left Process "
+        "switched off.",
+    )
+
+    press_row(source, SMALL_PHOTO)
+    press_row(source, LARGE_PHOTO)
+    counter = str(source.files.counter.getText())
+    verdict(
+        app, len(source.checked) == 2 and counter == "2 selected"
+        and is_on(app.process_btn),
+        f"Pressing two photos checked both: the corner reads {counter!r} and "
+        "Process is available.",
+    )
+
+    photos = [e for e in source.entries if e.name in (SMALL_PHOTO, LARGE_PHOTO)]
+    cache = source.files.thumbs.cache
+    pictured = await until(
+        lambda: all(hasattr(cache.get(e.doc_id), "getWidth") for e in photos), 20
+    )
+    verdict(
+        app, pictured,
+        "Both photos have thumbnails from the storage app"
+        + (
+            f", {cache[photos[0].doc_id].getWidth()} pixels square."
+            if pictured else ": NOT loaded."
+        ),
+    )
+
+    # The output side shows the same folder, and nothing there can be checked.
+    press_row(target, SMALL_PHOTO)
+    verdict(
+        app, len(source.checked) == 2 and not target.checked,
+        "Pressing a photo on the output side checked nothing.",
+    )
+    await hold(app, "home")
+
+    # What is checked is always in view: leaving the folder lets it go.
+    await source.up()
+    verdict(
+        app, not source.checked and not is_on(app.process_btn)
+        and str(source.files.counter.getText()) == "",
+        "Going up a folder cleared the checks and switched Process off.",
+    )
+    await enter(app, source, "Edits")
+    press_row(source, SMALL_PHOTO)
+    press_row(source, LARGE_PHOTO)
+
+
 # --- the editor -------------------------------------------------------------------
 
 async def editor(app) -> None:
-    """Frame a photo as a person would, plus a check they could not see."""
-    log = app.log
+    """Frame photos as a person would, plus a check they could not see."""
+    log, target = app.log, app.target
     log.section("Self-test: rotation and colour together")
     # A Display P3 image stored on its side, as a camera held upright would
     # store it. Android has to convert the colour, and this app has to turn
@@ -250,25 +379,40 @@ async def editor(app) -> None:
         f"colours within {worst} of the desktop",
     )
 
-    log.section("Self-test: framing a photo from the folder")
-    before = {e.name for e in await app.work(storage.children, app.tree, app.here)}
-    await app.select_photos(initial=storage.folder_address(app.tree, app.here))
-    if not app.picked:
-        log.write("FAIL  No photo came back from the picker.")
+    log.section("Self-test: framing two photos")
+    before = set(names(target))
+    app.process_btn._impl.native.performClick()
+    opened = await until(
+        lambda: app.main_window.content is app.editor_box and not app.busy
+    )
+    if not opened:
+        log.write("FAIL  Pressing Process did not open the editor.")
         return
     verdict(
-        app, app.main_window.content is app.editor_box,
-        "The editor opened with a preview.",
+        app, len(app.picked) == 2 and app.count_label.text == "1 of 2"
+        and is_on(app.next_btn) and is_on(app.previous_btn)
+        and shown_text(app.next_btn) == "Next photo"
+        and shown_text(app.previous_btn) == "Previous photo"
+        and shown_text(app.save_btn) == "Save photos",
+        f"The editor opened on {app.count_label.text!r} with "
+        f"{shown_text(app.previous_btn)!r} and {shown_text(app.next_btn)!r} "
+        f"available, and the save button reads {shown_text(app.save_btn)!r}.",
     )
-    # Asked of Android itself, not of this app's own record of it.
-    stepping_off = not (
-        bool(app.next_btn._impl.native.isEnabled())
-        or bool(app.previous_btn._impl.native.isEnabled())
-    )
+    last = app.next_btn._impl.native
     verdict(
-        app, stepping_off and shown_text(app.save_btn) == "Save",
-        "With one photo chosen, the next and previous buttons are switched off "
-        f"and the save button reads {shown_text(app.save_btn)!r}.",
+        app, 0 < last.getRight() <= last.getParent().getWidth(),
+        f"The row of photo buttons fits: it ends at {last.getRight()} of "
+        f"{last.getParent().getWidth()} pixels.",
+    )
+    first = app.sizes[0]
+    await app.next_photo()
+    stepped = app.count_label.text
+    await app.previous_photo()
+    verdict(
+        app, stepped == "2 of 2" and app.count_label.text == "1 of 2"
+        and app.sizes.get(1) not in (None, first),
+        f"Next showed {stepped!r}, a photo of {app.sizes.get(1)} after one of "
+        f"{first}; Previous went back to {app.count_label.text!r}.",
     )
     verdict(
         app, app.hint_label.text.startswith("Drag to move"),
@@ -289,21 +433,29 @@ async def editor(app) -> None:
 
     verdict(
         app, app.main_window.content is app.home_box
-        and app.said == "Saved 1 photo to “Edits” and the gallery",
+        and app.said == "Saved 2 photos to “Edits” and the gallery",
         f"Saving returned to the first screen and said: {app.said!r}",
     )
-    after = await app.work(storage.children, app.tree, app.here)
-    new = [e for e in after if e.name not in before]
-    if len(new) != 1:
-        log.write(f"FAIL  Expected one new file in the folder, found {len(new)}.")
-        return
-    data = await app.work(storage.read_bytes, app.tree, new[0].doc_id)
-    with Image.open(io.BytesIO(data)) as saved:
-        verdict(
-            app, saved.size == (1080, 1080),
-            f"Saved {new[0].name!r} as {saved.size[0]} x {saved.size[1]}, "
-            "following the settings chosen.",
-        )
+    verdict(
+        app, not app.source.checked and not is_on(app.process_btn),
+        "The photos that were processed are no longer checked.",
+    )
+    new = [e for e in target.entries if e.name not in before]
+    listed_first = [e.name for e in target.entries if not e.is_dir][: len(new)]
+    verdict(
+        app, len(new) == 2 and set(listed_first) == {e.name for e in new}
+        and set(names(app.source)) == set(names(target)),
+        f"{len(new)} new files head the output list, and the input list, "
+        "looking at the same folder, shows them too.",
+    )
+    for entry in new:
+        data = await app.work(storage.read_bytes, target.tree, entry.doc_id)
+        with Image.open(io.BytesIO(data)) as saved:
+            verdict(
+                app, saved.size == (1080, 1080),
+                f"Saved {entry.name!r} as {saved.size[0]} x {saved.size[1]}, "
+                "following the settings chosen.",
+            )
 
 
 async def rotation(app) -> None:
@@ -369,7 +521,7 @@ async def fingers(app) -> None:
     log.section("Self-test: dragging and pinching")
     from android.view import MotionEvent
 
-    # A square frame on a tall photo: room to slide up and down.
+    # A square frame: whichever way the photo lies, it has room to slide.
     choose(app.ratio_select, app.ratio_choices, "1:1")
     choose(app.fit_select, FIT_CHOICES, "crop")
     await asyncio.sleep(1)
@@ -378,10 +530,11 @@ async def fingers(app) -> None:
     size = app.sizes[app.preview_index]
     box = framing.output_box(app.current_framing())
     centre_x, centre_y, shown_width = touch.shown_at(view)
+    scale = framing.OUTPUT_WIDTH / shown_width
     log.write(
-        f"The preview is drawn {shown_width:.0f} pixels wide, centred at "
-        f"{centre_x:.0f}, {centre_y:.0f} in a view {view.getWidth()} x "
-        f"{view.getHeight()}."
+        f"The photo is {size[0]} x {size[1]}. The preview is drawn "
+        f"{shown_width:.0f} pixels wide, centred at {centre_x:.0f}, "
+        f"{centre_y:.0f} in a view {view.getWidth()} x {view.getHeight()}."
     )
 
     async def touches(*moments) -> None:
@@ -390,28 +543,48 @@ async def fingers(app) -> None:
             touch.send(view, action, points, began)
             await asyncio.sleep(0.05)
 
-    # One finger, pulled straight down.
-    pull = 60
+    def pinch(start: float, end: float):
+        """Two fingers either side of the centre, from `start` apart to `end`."""
+        second = touch.second_finger
+
+        def pair(apart: float):
+            return [(centre_x - apart / 2, centre_y), (centre_x + apart / 2, centre_y)]
+
+        return (
+            (MotionEvent.ACTION_DOWN, pair(start)[:1]),
+            (second(MotionEvent.ACTION_POINTER_DOWN), pair(start)),
+            *[
+                (MotionEvent.ACTION_MOVE, pair(start + (end - start) * n / 4))
+                for n in range(1, 5)
+            ],
+            (second(MotionEvent.ACTION_POINTER_UP), pair(end)),
+            (MotionEvent.ACTION_UP, pair(end)[:1]),
+        )
+
+    # One finger, pulled down and to the right.
+    pull = (40, 60)
     app.quick_frames, app.quick_seconds = 0, 0.0
     await touches(
         (MotionEvent.ACTION_DOWN, [(centre_x, centre_y)]),
         *[
-            (MotionEvent.ACTION_MOVE, [(centre_x, centre_y + pull * n / 6)])
+            (MotionEvent.ACTION_MOVE,
+             [(centre_x + pull[0] * n / 6, centre_y + pull[1] * n / 6)])
             for n in range(1, 7)
         ],
-        (MotionEvent.ACTION_UP, [(centre_x, centre_y + pull)]),
+        (MotionEvent.ACTION_UP, [(centre_x + pull[0], centre_y + pull[1])]),
     )
     expected = g.moved(
         size, box, g.Placement(), before=(0, 0),
-        after=(0, pull * framing.OUTPUT_WIDTH / shown_width),
+        after=(pull[0] * scale, pull[1] * scale),
     )
     got = app.placement()
     verdict(
-        app, got.offset_y < 0 and abs(got.offset_y - expected.offset_y) < 0.01
-        and got.offset_x == 0 and not app.dragging,
-        f"One finger pulled down {pull} pixels slid the photo down by "
-        f"{-got.offset_y:.3f} of the room it has; exact would be "
-        f"{-expected.offset_y:.3f}.",
+        app, (got.offset_x, got.offset_y) != (0, 0)
+        and abs(got.offset_x - expected.offset_x) < 0.01
+        and abs(got.offset_y - expected.offset_y) < 0.01 and not app.dragging,
+        f"One finger pulled {pull[0]} across and {pull[1]} down slid the photo "
+        f"to {got.offset_x:.3f}, {got.offset_y:.3f} of the room it has; exact "
+        f"would be {expected.offset_x:.3f}, {expected.offset_y:.3f}.",
     )
     frames = app.quick_frames
     each = app.quick_seconds / frames * 1000 if frames else 0.0
@@ -421,44 +594,31 @@ async def fingers(app) -> None:
         f"in {each:.0f} ms each.",
     )
     await hold(app, "editor-dragged")
+    app.recentre()
 
-    # Two fingers, spread far apart: zoom, up to the limit and no further.
     limit = g.max_zoom(size, box, app.placement())
-    second = touch.second_finger
-    await touches(
-        (MotionEvent.ACTION_DOWN, [(centre_x - 40, centre_y)]),
-        (second(MotionEvent.ACTION_POINTER_DOWN),
-         [(centre_x - 40, centre_y), (centre_x + 40, centre_y)]),
-        *[
-            (MotionEvent.ACTION_MOVE,
-             [(centre_x - 40 - 30 * n, centre_y), (centre_x + 40 + 30 * n, centre_y)])
-            for n in range(1, 5)
-        ],
-        (second(MotionEvent.ACTION_POINTER_UP),
-         [(centre_x - 160, centre_y), (centre_x + 160, centre_y)]),
-        (MotionEvent.ACTION_UP, [(centre_x - 160, centre_y)]),
-    )
+    if limit >= 1.5:
+        # Room to zoom: a modest pinch should zoom by exactly that much.
+        await touches(*pinch(80, 112))
+        zoomed = app.placement().zoom
+        verdict(
+            app, abs(zoomed - 1.4) < 0.01,
+            f"Two fingers spread from 80 to 112 pixels apart zoomed to "
+            f"{zoomed:.3f}; exact would be 1.400.",
+        )
+        app.recentre()
+
+    # Spread far apart: zoom, up to the limit and no further.
+    await touches(*pinch(80, 400))
     zoomed = app.placement().zoom
     verdict(
         app, limit > 1 and abs(zoomed - limit) < 1e-6,
-        f"Two fingers spread to four times apart zoomed to {zoomed:.3f} and "
+        f"Two fingers spread to five times apart zoomed to {zoomed:.3f} and "
         f"stopped: the limit for this photo is {limit:.3f}.",
     )
 
     # And pinched back together: out again, but never smaller than the frame.
-    await touches(
-        (MotionEvent.ACTION_DOWN, [(centre_x - 160, centre_y)]),
-        (second(MotionEvent.ACTION_POINTER_DOWN),
-         [(centre_x - 160, centre_y), (centre_x + 160, centre_y)]),
-        *[
-            (MotionEvent.ACTION_MOVE,
-             [(centre_x - 160 + 30 * n, centre_y), (centre_x + 160 - 30 * n, centre_y)])
-            for n in range(1, 5)
-        ],
-        (second(MotionEvent.ACTION_POINTER_UP),
-         [(centre_x - 40, centre_y), (centre_x + 40, centre_y)]),
-        (MotionEvent.ACTION_UP, [(centre_x - 40, centre_y)]),
-    )
+    await touches(*pinch(400, 60))
     verdict(
         app, app.placement().zoom == 1.0,
         f"Pinched back together, the zoom returned to "
@@ -481,13 +641,26 @@ async def fingers(app) -> None:
 
 
 async def leaving(app) -> None:
-    """Back out of the editor without saving."""
-    log = app.log
-    log.section("Self-test: leaving the editor")
-    await app.select_photos(initial=storage.folder_address(app.tree, app.here))
-    if not app.picked:
-        log.write("FAIL  No photo came back from the picker.")
+    """One photo, and backing out of the editor without saving."""
+    log, source = app.log, app.source
+    log.section("Self-test: one photo, and leaving the editor")
+    press_row(source, SMALL_PHOTO)
+    app.process_btn._impl.native.performClick()
+    opened = await until(
+        lambda: app.main_window.content is app.editor_box and not app.busy
+    )
+    if not opened:
+        log.write("FAIL  Pressing Process did not open the editor.")
         return
+    verdict(
+        app, app.count_label.text == "1 of 1"
+        and not is_on(app.next_btn) and not is_on(app.previous_btn)
+        and shown_text(app.save_btn) == "Save photo",
+        "With one photo loaded, the next and previous buttons are switched off "
+        f"and the save button reads {shown_text(app.save_btn)!r}.",
+    )
+    await hold(app, "editor-one-photo")
+
     app.rotate(1)
     app.clear_guides()
     listening = app.back.listening
@@ -495,9 +668,10 @@ async def leaving(app) -> None:
     app.on_back()
     left = await until(lambda: app.main_window.content is app.home_box)
     verdict(
-        app, left and not app.picked and not app.back.listening,
-        "Back from the editor returned to the first screen and dropped the "
-        "photo, without closing the app.",
+        app, left and not app.picked and not app.back.listening
+        and len(source.checked) == 1 and is_on(app.process_btn),
+        "Back from the editor returned to the first screen without closing "
+        "the app, with the photo still checked.",
     )
     log.write(
         "The Back gesture itself: "
@@ -508,3 +682,23 @@ async def leaving(app) -> None:
             "checked only what the app does when told."
         )
     )
+
+
+def remembered(app) -> None:
+    """Both folders, and where each was looking, are on record for next time."""
+    app.log.section("Self-test: remembering the folders")
+    noted = places.load(app.places_file())
+    ok = all(
+        noted[b.side].tree == storage.address(b.tree)
+        and noted[b.side].trail == b.trail and len(b.trail) == 3
+        for b in app.browsers
+    )
+    verdict(
+        app, ok,
+        "Both folders are on record, each two levels down from the folder granted.",
+    )
+    held = all(
+        storage.held(noted[b.side].tree, write=b.creates) is not None
+        for b in app.browsers
+    )
+    verdict(app, held, "Access to both is recorded as lasting beyond this session.")

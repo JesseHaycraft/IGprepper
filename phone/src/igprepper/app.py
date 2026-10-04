@@ -1,18 +1,20 @@
 """IGprepper for Android.
 
-Two screens. The first is where framed photos will be saved: a folder,
-browsed the way a file manager browses one, and optionally the phone's
-gallery. The second is the editor: the chosen photos one at a time, each
-positioned by hand inside a frame whose shape and border the batch shares.
+Two screens. The first is a pair of folder browsers, one above the other:
+the input folder, where photos are checked for processing, and the output
+folder, where the framed photos will go. The second is the editor: the
+checked photos one at a time, each positioned by hand inside a frame whose
+shape and border the batch shares.
 
-The app works inside whichever folder is chosen in Android's folder picker,
-so it is tied to no particular storage. It never invents a folder name:
-folders are created only when a name is typed, exactly as typed.
+The app works inside whichever folders are chosen in Android's folder
+picker, so it is tied to no particular storage. It never changes anything in
+the input folder, and never invents a folder name: folders are created only
+when a name is typed, exactly as typed.
 
 A log of what the app did is kept in Download/IGprepper for when something
 goes wrong. It records the names of folders the app was asked to create, and
-nothing about what was already in the storage: existing folders and the
-photos chosen appear on screen but are never written down.
+nothing about what was already in the storage: existing folders and files
+appear on screen but are never written down.
 """
 
 from __future__ import annotations
@@ -38,10 +40,12 @@ from . import (
     framing,
     gestures,
     icons,
+    places,
     storage,
     touch,
     words,
 )
+from .browser import Browser
 from .phonelog import PhoneLog
 
 ACCENT = "#8AB4F8"
@@ -72,6 +76,7 @@ class Look:
     kind: str
     text: str
     icon: str | None
+    icon_after: bool = False
     shown: tuple | None = None
 
 
@@ -80,13 +85,6 @@ class IGprepper(toga.App):
         self.log = PhoneLog()
         self.log.install_excepthook()
 
-        self.tree = None
-        # The path from the chosen folder down to where we are: (id, name).
-        self.trail: list[tuple[str, str]] = []
-        # Folders this app created, whose names may therefore be logged.
-        self.created: set[str] = set()
-        self.subfolders: list[storage.Entry] = []
-        self.folder_rows: list[toga.Button] = []
         self.busy = False
         # Set by the build's own check, which has nobody to answer a pop-up.
         self.unattended = False
@@ -114,7 +112,7 @@ class IGprepper(toga.App):
 
         self.looks: dict[toga.Button, Look] = {}
         self.drawn_icons: dict[tuple[str, str], object] = {}
-        self.name_dialog = None
+        self.icon_bitmaps: dict[tuple[str, str], object] = {}
         self.back = androidui.BackButton(self.on_back)
 
         self.build_home()
@@ -125,54 +123,36 @@ class IGprepper(toga.App):
 
         self.guard("describing the phone", self.report_environment)
         self.guard("darkening the system bars", self.darken_system_bars)
-        self.show_location()
         self.refresh_controls()
 
     # --- the two screens ------------------------------------------------------
 
     def build_home(self) -> None:
-        """Where framed photos go, and the way in to choosing some."""
-        caption = toga.Label(
-            "Save framed photos to", style=Pack(color=DIM, font_size=9)
+        """Two folder browsers, and between them the button that sends the
+        checked photos from one towards the other."""
+        self.source = Browser(
+            self, "input", "Input folder", selects=True,
+            ask="Choose the folder your photos are in",
         )
-        self.folder_label = toga.Label(
-            "", style=Pack(font_size=15, font_weight="bold", margin_top=2)
+        self.target = Browser(
+            self, "output", "Output folder", creates=True,
+            ask="Choose the folder framed photos should go to",
         )
-        self.trail_label = toga.Label(
-            "", style=Pack(color=DIM, font_size=9, margin_top=2)
-        )
+        self.browsers = (self.source, self.target)
 
-        self.up_btn = self.button("Up", self.go_up, icon="up", flex=1)
-        self.new_btn = self.button(
-            "New folder", self.new_folder, icon="new_folder", flex=1, margin_left=6
+        self.process_btn = self.button(
+            "Process selected photos", self.process_selected, icon="photo",
+            kind="primary", margin_top=8,
         )
-        self.choose_btn = self.button(
-            "Change", self.choose_folder, icon="folder", flex=1, margin_left=6
-        )
-        tools = toga.Box(
-            children=[self.up_btn, self.new_btn, self.choose_btn],
-            style=Pack(direction=ROW, margin_top=10),
-        )
-
-        self.folder_list = toga.Box(style=Pack(direction=COLUMN))
-        self.folder_scroll = toga.ScrollContainer(
-            content=self.folder_list, horizontal=False,
-            style=Pack(flex=1, margin_top=10),
-        )
-
         self.gallery_switch = toga.Switch(
-            "Also save to this phone’s gallery", value=True,
-            style=Pack(margin_top=10),
-        )
-        self.select_btn = self.button(
-            "Select photos", self.select_photos, icon="photo", kind="primary",
-            margin_top=10, height=56,
+            "Also save to this phone\u2019s gallery", value=True,
+            style=Pack(margin_top=2, margin_bottom=6),
         )
 
         self.home_box = toga.Box(
             children=[
-                caption, self.folder_label, self.trail_label, tools,
-                self.folder_scroll, self.gallery_switch, self.select_btn,
+                self.source.box, self.process_btn, self.gallery_switch,
+                self.target.box,
             ],
             style=Pack(direction=COLUMN, margin=12),
         )
@@ -180,12 +160,12 @@ class IGprepper(toga.App):
     def build_editor(self) -> None:
         """The photo on top, everything that changes it beneath."""
         self.previous_btn = self.button(
-            "", self.previous_photo, icon="previous", width=56
+            "Previous photo", self.previous_photo, icon="previous"
         )
-        self.count_label = toga.Label(
-            "", style=Pack(flex=1, text_align=CENTER, font_size=12)
+        self.count_label = toga.Label("", style=Pack(flex=1, text_align=CENTER))
+        self.next_btn = self.button(
+            "Next photo", self.next_photo, icon="next", icon_after=True
         )
-        self.next_btn = self.button("", self.next_photo, icon="next", width=56)
         stepping = toga.Box(
             children=[self.previous_btn, self.count_label, self.next_btn],
             style=Pack(direction=ROW, align_items=CENTER),
@@ -268,6 +248,9 @@ class IGprepper(toga.App):
     def show_home(self) -> None:
         self.forget_photos()
         self.main_window.content = self.home_box
+        # The lists are Android's own, and need telling they are back.
+        for browser in self.browsers:
+            browser.show_rows()
         self.guard("handing Back to the phone", lambda: self.back.listen(False))
         self.refresh_controls()
 
@@ -278,8 +261,8 @@ class IGprepper(toga.App):
         self.refresh_controls()
 
     async def on_running(self) -> None:
-        """Once the screen is up: pick up last session's folder, if any."""
-        await self.restore_folder()
+        """Once the screen is up: pick up last session's folders, if any."""
+        await self.restore_places()
         self.guard("clearing out old logs", lambda: self.log.prune(KEPT_LOGS))
         self.log.write("")
         self.log.write("=== Ready ===")
@@ -330,10 +313,6 @@ class IGprepper(toga.App):
                 f"That did not work ({doing}). The details are in the log in "
                 "Download/IGprepper.",
             )
-
-    @property
-    def here(self) -> str:
-        return self.trail[-1][0]
 
     def self_test_requested(self) -> bool:
         try:
@@ -387,11 +366,11 @@ class IGprepper(toga.App):
 
     def button(
         self, text: str, on_press, *, icon: str | None = None,
-        kind: str = "plain", **style,
+        kind: str = "plain", icon_after: bool = False, **style,
     ) -> toga.Button:
-        """A button with an icon before its label, in one of the app's looks."""
+        """A button with an icon beside its label, in one of the app's looks."""
         made = toga.Button(text, on_press=on_press, style=Pack(**style))
-        self.looks[made] = Look(kind, text, icon)
+        self.looks[made] = Look(kind, text, icon, icon_after)
         self.guard(
             "shaping a button", lambda: androidui.plain_button(made._impl.native)
         )
@@ -408,6 +387,13 @@ class IGprepper(toga.App):
             )
         return self.drawn_icons[key]
 
+    def icon_bitmap(self, name: str, colour: str):
+        """An icon as a plain picture, for a row of a list."""
+        key = (name, colour)
+        if key not in self.icon_bitmaps:
+            self.icon_bitmaps[key] = androidui.bitmap(icons.icon(name, 96, colour))
+        return self.icon_bitmaps[key]
+
     def dress(self, button: toga.Button, on: bool) -> None:
         look = self.looks[button]
         state = (on, look.text)
@@ -421,7 +407,7 @@ class IGprepper(toga.App):
             icon = (
                 self.drawn_icon(look.icon, colours["color"]) if look.icon else None
             )
-            androidui.label(button._impl.native, look.text, icon)
+            androidui.label(button._impl.native, look.text, icon, look.icon_after)
 
         self.guard("labelling a button", label)
         button.refresh()
@@ -437,16 +423,12 @@ class IGprepper(toga.App):
 
     def refresh_controls(self) -> None:
         free = not self.busy
-        have_folder = self.tree is not None
         editing = bool(self.picked)
         several = len(self.picked) > 1
 
-        self.switch(self.choose_btn, free)
-        self.switch(self.up_btn, free and len(self.trail) > 1)
-        self.switch(self.new_btn, free and have_folder)
-        self.switch(self.select_btn, free)
-        for row in self.folder_rows:
-            self.switch(row, free)
+        for browser in self.browsers:
+            browser.refresh_controls(free)
+        self.switch(self.process_btn, free and bool(self.source.checked))
 
         self.switch(self.previous_btn, free and several)
         self.switch(self.next_btn, free and several)
@@ -455,165 +437,51 @@ class IGprepper(toga.App):
         self.switch(self.cancel_btn, free)
         self.switch(self.save_btn, free and editing)
 
-    # --- where photos are saved ---------------------------------------------------
+    # --- the two folders ------------------------------------------------------------
 
-    def show_location(self) -> None:
-        """The folder's name, the way to it, and the folders inside it."""
-        if self.tree is None:
-            self.folder_label.text = "Gallery only"
-            self.trail_label.text = "No folder chosen"
-        else:
-            names = [name for _, name in self.trail]
-            self.folder_label.text = words.shorten(names[-1], 26)
-            self.trail_label.text = (
-                "In " + words.trail(names[:-1], 44) if names[:-1] else "Chosen folder"
-            )
-        self.relabel(
-            self.choose_btn, "Change" if self.tree is not None else "Choose folder"
-        )
+    def places_file(self):
+        return self.paths.data / "places.json"
 
-        for row in self.folder_rows:
-            self.looks.pop(row, None)
-        self.folder_rows = []
-        self.folder_list.clear()
-
-        def note(text: str) -> None:
-            self.folder_list.add(
-                toga.Label(text, style=Pack(color=DIM, margin_top=4))
-            )
-
-        if self.tree is None:
-            note("Framed photos will go to the gallery only.")
-            note("Choose a folder to save them there as well.")
-        elif not self.subfolders:
-            note("No folders in here.")
-        for entry in self.subfolders:
-            row = self.button(
-                words.shorten(entry.name, 32), self.opener(entry),
-                icon="folder", kind="row", margin_bottom=4,
-            )
-            self.guard(
-                "lining up a folder", lambda r=row: androidui.align_start(r._impl.native)
-            )
-            self.folder_rows.append(row)
-            self.folder_list.add(row)
-
-    async def choose_folder(self, widget=None, initial=None) -> None:
-        await self.exclusively("choosing a folder", self._choose_folder(initial))
-
-    async def _choose_folder(self, initial) -> None:
-        self.log.section("Choosing a folder")
-        tree = await storage.pick_folder(self, initial)
-        if tree is None:
-            self.log.write("The picker was closed without a folder being chosen.")
-            return
-        await self.open_tree(tree, "granted through the picker")
-
-    async def restore_folder(self) -> None:
+    async def restore_places(self) -> None:
+        """Open each side where the last session left it."""
+        self.log.section("Folders from an earlier session")
         try:
-            tree = storage.persisted_folder()
-            if tree is None:
-                return
-            self.log.section("Folder access from an earlier session")
-            await self.open_tree(tree, "still held, with no trip through the picker")
+            remembered = places.load(self.places_file())
+            # Versions before this one had a single folder and kept no note
+            # of it. That folder was where framed photos went.
+            if all(place.tree is None for place in remembered.values()):
+                earlier = storage.newest_writable_grant()
+                if earlier is not None:
+                    remembered["output"] = places.Place(storage.address(earlier))
         except Exception:
-            self.log.exception("restoring folder access")
+            self.log.exception("reading the remembered folders")
+            remembered = {}
+        restored = 0
+        for browser in self.browsers:
+            try:
+                place = remembered.get(browser.side, places.Place())
+                restored += await browser.restore(place)
+            except Exception:
+                self.log.exception(f"restoring the {browser.side} folder")
+        if not restored:
+            self.log.write("None: no folder has been chosen yet.")
+        self.places_changed()
         self.refresh_controls()
 
-    async def open_tree(self, tree, how: str) -> None:
-        root = await self.work(storage.describe, tree, storage.root_id(tree))
-        self.tree = tree
-        self.trail = [(root.doc_id, root.name)]
-        self.created = set()
-        self.log.write(f"PASS  Folder access {how}.")
-        self.log.write(f"Storage app: {storage.provider_name(tree)}")
-        await self.refresh_listing()
+    def places_changed(self, released: str | None = None) -> None:
+        """Note where both sides now are, for next time. `released` is a
+        folder one side has just left for a different one."""
+        current = {browser.side: browser.place() for browser in self.browsers}
+        self.guard(
+            "noting the folders", lambda: places.save(self.places_file(), current)
+        )
+        if released is not None and all(
+            place.tree != released for place in current.values()
+        ):
+            self.guard("giving up a folder", lambda: storage.release(released))
 
-    async def refresh_listing(self) -> None:
-        entries = await self.work(storage.children, self.tree, self.here)
-        self.subfolders = sorted(
-            (e for e in entries if e.is_dir), key=lambda e: e.name.lower()
-        )
-        files = sum(1 for e in entries if not e.is_dir)
-        self.log.write(
-            f"This folder holds {len(self.subfolders)} folder(s) and {files} "
-            "file(s). Names are not logged."
-        )
-        self.show_location()
+    def selection_changed(self) -> None:
         self.refresh_controls()
-
-    def opener(self, entry: storage.Entry):
-        async def open_it(widget=None) -> None:
-            await self.open_folder(entry)
-
-        return open_it
-
-    async def open_folder(self, entry: storage.Entry) -> None:
-        await self.exclusively("opening a folder", self._open_folder(entry))
-
-    async def _open_folder(self, entry: storage.Entry) -> None:
-        self.trail.append((entry.doc_id, entry.name))
-        if entry.doc_id in self.created:
-            self.log.write(f"Opened {entry.name!r}, {len(self.trail) - 1} level(s) down.")
-        else:
-            self.log.write(
-                f"Opened an existing folder, {len(self.trail) - 1} level(s) down. "
-                "Its name is not logged."
-            )
-        await self.refresh_listing()
-
-    async def go_up(self, widget=None) -> None:
-        await self.exclusively("going up a folder", self._go_up())
-
-    async def _go_up(self) -> None:
-        if len(self.trail) <= 1:
-            return
-        self.trail.pop()
-        self.log.write(f"Went up, now {len(self.trail) - 1} level(s) down.")
-        await self.refresh_listing()
-
-    async def new_folder(self, widget=None) -> None:
-        """Ask for a name, as a file manager does."""
-        if self.busy or self.tree is None:
-            return
-        self.name_dialog = androidui.ask_for_text(
-            "New folder", "Folder name", "Create", self.name_given
-        )
-
-    def name_given(self, name: str) -> None:
-        # Called by Android when Create is pressed; the work is done in turn.
-        asyncio.ensure_future(self.create_folder(name))
-
-    async def create_folder(self, name: str) -> None:
-        await self.exclusively("creating a folder", self._create_folder(name))
-
-    async def _create_folder(self, name: str) -> None:
-        name = name.strip()
-        if not name:
-            self.announce("No name was typed, so no folder was created")
-            return
-        self.log.section("Creating a folder")
-        # Some storage will happily hold two folders of one name. Nobody
-        # wants that, so it is settled here.
-        if any(e.name.lower() == name.lower() for e in self.subfolders):
-            self.log.write("A folder of that name is already here; none created.")
-            await self.tell(
-                "Already there",
-                "This folder already has one called "
-                f"“{words.shorten(name, 40)}”.",
-                logged="a folder of that name is already here.",
-            )
-            return
-        entry = await self.work(storage.create_folder, self.tree, self.here, name)
-        self.created.add(entry.doc_id)
-        if entry.name == name:
-            self.log.write(f"PASS  Created {entry.name!r}, exactly as typed.")
-        else:
-            self.log.write(
-                f"INFO  Asked for {name!r}; the storage app created {entry.name!r}."
-            )
-        await self.refresh_listing()
-        self.announce(f"Created “{words.shorten(entry.name, 30)}”")
 
     # --- choosing photos ------------------------------------------------------------
 
@@ -624,20 +492,21 @@ class IGprepper(toga.App):
             border_pct=round(float(self.border_slider.value) * 2) / 2,
         )
 
-    async def select_photos(self, widget=None, initial=None) -> None:
-        await self.exclusively("choosing photos", self._select_photos(initial))
+    async def process_selected(self, widget=None) -> None:
+        await self.exclusively("opening the checked photos", self._process_selected())
 
-    async def _select_photos(self, initial) -> None:
+    async def _process_selected(self) -> None:
         self.log.section("Framing photos")
-        addresses = await storage.pick_photos(self, initial)
-        if not addresses:
-            self.log.write("No photos were chosen.")
+        chosen = self.source.chosen()
+        if not chosen:
+            self.log.write("No photos are checked.")
             return
         self.forget_photos()
-        for address in addresses:
-            name = await self.work(storage.display_name, address)
-            self.picked.append((address, name))
-        self.log.write(f"{len(self.picked)} photo(s) chosen. Names are not logged.")
+        tree = self.source.tree
+        self.picked = [
+            (storage.document_uri(tree, entry.doc_id), entry.name) for entry in chosen
+        ]
+        self.log.write(f"{len(self.picked)} photo(s) checked. Names are not logged.")
         await self.show_photo()
         self.show_editor()
 
@@ -718,7 +587,7 @@ class IGprepper(toga.App):
         placement = self.placement()
         count = len(self.picked)
         angle = framing.angle_label(placement.angle)
-        self.count_label.text = f"Photo {self.preview_index + 1} of {count}"
+        self.count_label.text = f"{self.preview_index + 1} of {count}"
         self.border_value.text = f"{chosen.border_pct:g}%"
         self.relabel(self.angle_btn, angle)
         self.hint_label.text = words.hint(
@@ -726,9 +595,7 @@ class IGprepper(toga.App):
             forced_to_fill=placement.positioned and chosen.mode == "fit",
             angle=angle,
         )
-        self.relabel(
-            self.save_btn, "Save" if count == 1 else f"Save all {count} photos"
-        )
+        self.relabel(self.save_btn, "Save photo" if count == 1 else "Save photos")
 
     def draw_preview(self) -> None:
         image = self.preview_plain
@@ -878,23 +745,32 @@ class IGprepper(toga.App):
 
     async def _save_framed(self) -> None:
         to_gallery = bool(self.gallery_switch.value)
-        if self.tree is None and not to_gallery:
+        target = self.target
+        if target.tree is None and not to_gallery:
             await self.tell(
                 "Nowhere to save",
-                "No folder is chosen and saving to the gallery is switched off. "
-                "Go back and choose a folder, or switch the gallery on.",
+                "No output folder is chosen and saving to the gallery is "
+                "switched off. Go back and choose an output folder, or switch "
+                "the gallery on.",
             )
             return
-        here = self.here if self.tree is not None else None
-        folder = self.trail[-1][1] if self.tree is not None else None
+        here = target.here if target.tree is not None else None
+        folder = target.folder_name
         total = len(self.picked)
         saved = await self.work(
             self.save_framed_now, list(self.picked), self.current_framing(),
-            dict(self.placements), to_gallery, self.tree, here,
+            dict(self.placements), to_gallery, target.tree, here,
         )
+        # Done with: what was checked has been processed.
+        self.source.uncheck_all()
         self.show_home()
-        if self.tree is not None:
-            await self.refresh_listing()
+        # Show the new files where they landed. If input and output are the
+        # same folder, they have landed in both.
+        for browser in self.browsers:
+            if browser.tree is not None and (
+                browser is target or browser.place() == target.place()
+            ):
+                await browser.reload()
         if saved == total:
             self.announce(
                 words.saved(saved, folder, to_gallery),
@@ -908,7 +784,8 @@ class IGprepper(toga.App):
             )
 
     def show_progress(self, number: int, total: int) -> None:
-        self.count_label.text = f"Saving {number} of {total}…"
+        # Under the photo, where there is room for it.
+        self.hint_label.text = f"Saving {number} of {total}\u2026"
 
     def save_framed_now(
         self, picked, chosen: Framing, placements, to_gallery, tree, here

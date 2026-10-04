@@ -39,6 +39,10 @@ def trail(names: list[str], limit: int) -> str:
     return shorten(STEP.join([ELLIPSIS, *kept]), limit)
 
 
+def selected(count: int) -> str:
+    return f"{count} selected"
+
+
 def photos(count: int) -> str:
     return "1 photo" if count == 1 else f"{count} photos"
 

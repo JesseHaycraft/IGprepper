@@ -98,6 +98,21 @@ def _chevron_right(pen: _Pen) -> None:
     pen.line([(9.5, 6), (15.5, 12), (9.5, 18)], width=2.2)
 
 
+def _file(pen: _Pen) -> None:
+    pen.line([(6.5, 3.5), (13.5, 3.5), (17.5, 7.5), (17.5, 20.5), (6.5, 20.5), (6.5, 3.5)])
+    pen.line([(13.5, 3.5), (13.5, 7.5), (17.5, 7.5)], width=1.6)
+
+
+def _circle(pen: _Pen) -> None:
+    pen.arc((12, 12), 7.5, 0, 360)
+
+
+def _checked(pen: _Pen) -> None:
+    pen.dot((12, 12), 9.5)
+    # The tick is cut out of the disc, not laid over it.
+    pen.line([(7.6, 12.4), (10.6, 15.4), (16.4, 9.2)], width=2.0, ink=0)
+
+
 # name -> (how to draw it, whether to mirror the drawing left to right)
 _ICONS = {
     "folder": (_folder, False),
@@ -110,6 +125,9 @@ _ICONS = {
     "close": (_close, False),
     "next": (_chevron_right, False),
     "previous": (_chevron_right, True),
+    "file": (_file, False),
+    "unchecked": (_circle, False),
+    "checked": (_checked, False),
 }
 NAMES = tuple(_ICONS)
 

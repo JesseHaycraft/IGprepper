@@ -2,8 +2,8 @@
 
     python phone/tools/ci_drive.py /path/to/adb [seconds]
 
-The app's self-test opens Android's folder picker and then its file picker,
-and in an emulator there is nobody to press anything. This watches the
+The app's self-test opens Android's folder picker, once for each of its two
+folders, and in an emulator there is nobody to press anything. This watches the
 screen, presses what a person would, and stops once the app's log says the
 self-test has finished.
 """
@@ -20,11 +20,10 @@ ADB = sys.argv[1]
 SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 300
 LOGS = "/sdcard/Download/IGprepper"
 FINISHED = "=== Self-test finished ==="
-TEST_PHOTO = "igprepper-test-photo.jpg"
 APP_PACKAGE = "org.igprepper.igprepper"
 
 # Buttons to press whenever they are on screen, matched on their whole label.
-BUTTONS = ("use this folder", "allow", "select", "open")
+BUTTONS = ("use this folder", "allow")
 
 SHOTS = Path("screenshots")
 SHOT_REQUEST = re.compile(r"SCREENSHOT (\S+)")
@@ -87,8 +86,8 @@ def label(node: dict) -> str:
 
 
 def act(nodes: list[dict]) -> bool:
-    # Only ever the system's screens. The app has an "Open" button of its
-    # own, and pressing that would walk it into a folder mid-test.
+    # Only ever the system's screens: the app's own buttons are the
+    # self-test's to press.
     nodes = [n for n in nodes if n.get("package") != APP_PACKAGE]
 
     for wanted in BUTTONS:
@@ -96,19 +95,6 @@ def act(nodes: list[dict]) -> bool:
             if label(node) == wanted and node.get("enabled") != "false":
                 return tap(node, repr(node.get("text")))
 
-    # The test photo, wherever its name appears: as a caption in a list, or
-    # only as a description when the picker shows a grid of thumbnails.
-    for node in nodes:
-        named = TEST_PHOTO in label(node) or TEST_PHOTO in node.get("content-desc", "").lower()
-        if named and "documentsui" in node.get("package", ""):
-            return tap(node, "the test photo")
-
-    # Failing that, in the image picker, the first thumbnail on offer.
-    if any(label(n).startswith("images in ") for n in nodes):
-        for node in nodes:
-            identifier = node.get("resource-id", "")
-            if identifier.endswith((":id/item_root", ":id/icon_thumb", ":id/thumbnail")):
-                return tap(node, f"the first thumbnail ({identifier})")
     return False
 
 

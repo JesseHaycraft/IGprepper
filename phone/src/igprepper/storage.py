@@ -1,6 +1,6 @@
 """Android's Storage Access Framework, from Python.
 
-Another app's storage -- Proton Drive, here -- is reached through the system
+Another app's storage -- Google Drive, say -- is reached through the system
 folder picker. The picker hands back a "tree" address for the folder that was
 chosen; everything after that is a query or a create call against Android's
 ContentResolver using that address. The app that owns the storage does the
@@ -19,34 +19,23 @@ from java import jarray, jbyte, jclass
 from java.lang import String
 from org.beeware.android import MainActivity
 
+from .entries import DIR_MIME, Entry
+
 DocumentsContract = jclass("android.provider.DocumentsContract")
 GalleryImages = jclass("android.provider.MediaStore$Images$Media")
-Document = jclass("android.provider.DocumentsContract$Document")
+Point = jclass("android.graphics.Point")
+ThumbnailUtils = jclass("android.media.ThumbnailUtils")
 
-DIR_MIME = "vnd.android.document/directory"
 RESULT_OK = -1
+READ_ONLY = Intent.FLAG_GRANT_READ_URI_PERMISSION
 READ_WRITE = (
     Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
 )
 LOCAL_STORAGE = "com.android.externalstorage.documents"
 
-_COLUMNS = ["document_id", "_display_name", "mime_type", "_size", "flags"]
-
-# What a storage app may or may not allow, in the order worth reading. The
-# two lists differ because Android's "write" flag only ever applies to files;
-# reporting it as refused for a folder would read as a problem when it is not.
-_SHARED_CAPABILITIES = (
-    ("rename", Document.FLAG_SUPPORTS_RENAME),
-    ("move", Document.FLAG_SUPPORTS_MOVE),
-    ("copy", Document.FLAG_SUPPORTS_COPY),
-    ("delete", Document.FLAG_SUPPORTS_DELETE),
-)
-_FOLDER_CAPABILITIES = (
-    ("create items inside", Document.FLAG_DIR_SUPPORTS_CREATE),
-) + _SHARED_CAPABILITIES
-_FILE_CAPABILITIES = (
-    ("overwrite", Document.FLAG_SUPPORTS_WRITE),
-) + _SHARED_CAPABILITIES
+_COLUMNS = [
+    "document_id", "_display_name", "mime_type", "_size", "flags", "last_modified",
+]
 
 
 class StorageError(RuntimeError):
@@ -54,16 +43,11 @@ class StorageError(RuntimeError):
 
 
 @dataclass
-class Entry:
-    doc_id: str
-    name: str
-    is_dir: bool
-    size: int | None
-    flags: int
-
-    def capabilities(self) -> dict[str, bool]:
-        table = _FOLDER_CAPABILITIES if self.is_dir else _FILE_CAPABILITIES
-        return {label: bool(self.flags & bit) for label, bit in table}
+class Listing:
+    entries: list[Entry]
+    # True when the storage app handed over what it had so far and is still
+    # fetching the rest, as cloud storage does for a large folder.
+    loading: bool = False
 
 
 def resolver():
@@ -72,15 +56,17 @@ def resolver():
 
 # --- choosing a folder ------------------------------------------------------
 
-async def pick_folder(app, initial_uri=None):
+async def pick_folder(app, initial_uri=None, write: bool = True):
     """Show the system folder picker; return the chosen tree, or None.
 
     Access is requested as persistable, and taken as such, so it survives the
     app closing and the phone restarting without a second trip through the
-    picker.
+    picker. A folder that will only be read from is asked for read access
+    alone.
     """
+    access = READ_WRITE if write else READ_ONLY
     intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-    intent.addFlags(READ_WRITE | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+    intent.addFlags(access | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
     if initial_uri is not None:
         intent.putExtra("android.provider.extra.INITIAL_URI", initial_uri)
 
@@ -88,7 +74,7 @@ async def pick_folder(app, initial_uri=None):
     if result_code != RESULT_OK or data is None:
         return None
     tree = data.getData()
-    resolver().takePersistableUriPermission(tree, READ_WRITE)
+    resolver().takePersistableUriPermission(tree, access)
     return tree
 
 
@@ -106,41 +92,50 @@ async def _start(app, intent):
     return await finished
 
 
-async def pick_photos(app, initial_uri=None) -> list:
-    """Show the system file picker for images; return what was chosen.
-
-    The document picker, rather than the photo picker, because it hands over
-    the file exactly as stored and can also reach photos kept in cloud
-    storage.
-    """
-    intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
-    intent.addCategory(Intent.CATEGORY_OPENABLE)
-    intent.setType("image/*")
-    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
-    if initial_uri is not None:
-        intent.putExtra("android.provider.extra.INITIAL_URI", initial_uri)
-
-    result_code, data = await _start(app, intent)
-    if result_code != RESULT_OK or data is None:
-        return []
-    clip = data.getClipData()
-    if clip is not None:
-        return [clip.getItemAt(i).getUri() for i in range(clip.getItemCount())]
-    single = data.getData()
-    return [single] if single is not None else []
-
-
-def persisted_folder():
-    """The most recently granted folder that is still writable, or None."""
-    newest = None
+def _grants():
     permissions = resolver().getPersistedUriPermissions()
-    for i in range(permissions.size()):
-        permission = permissions.get(i)
-        if not permission.isWritePermission():
+    return [permissions.get(i) for i in range(permissions.size())]
+
+
+def held(address: str, write: bool):
+    """The tree at `address` if access to it is still held, else None."""
+    for grant in _grants():
+        if str(grant.getUri()) != address:
             continue
-        if newest is None or permission.getPersistedTime() > newest.getPersistedTime():
-            newest = permission
+        if grant.isWritePermission() if write else grant.isReadPermission():
+            return grant.getUri()
+    return None
+
+
+def newest_writable_grant():
+    """The most recently granted writable folder, or None.
+
+    Only for versions of the app that kept no record of their own: there
+    was one folder then, and this is how it was found.
+    """
+    newest = None
+    for grant in _grants():
+        if not grant.isWritePermission():
+            continue
+        if newest is None or grant.getPersistedTime() > newest.getPersistedTime():
+            newest = grant
     return newest.getUri() if newest is not None else None
+
+
+def release(address: str) -> None:
+    """Give up access to a folder that is no longer either side's.
+
+    Android allows an app only so many, and there is no reason to keep hold
+    of a folder nobody is looking at.
+    """
+    for grant in _grants():
+        if str(grant.getUri()) == address:
+            flags = READ_WRITE if grant.isWritePermission() else READ_ONLY
+            resolver().releasePersistableUriPermission(grant.getUri(), flags)
+
+
+def address(tree) -> str:
+    return str(tree)
 
 
 def local_folder_uri(path: str):
@@ -166,12 +161,19 @@ def _doc_uri(tree, doc_id: str):
     return DocumentsContract.buildDocumentUriUsingTree(tree, doc_id)
 
 
-def _rows(uri) -> list[Entry]:
+def document_uri(tree, doc_id: str):
+    """The address of one file, for reading it."""
+    return _doc_uri(tree, doc_id)
+
+
+def _rows(uri) -> Listing:
     cursor = resolver().query(uri, jarray(String)(_COLUMNS), None, None, None)
     if cursor is None:
         raise StorageError("The storage app returned nothing for that folder")
     entries = []
     try:
+        extras = cursor.getExtras()
+        loading = bool(extras is not None and extras.getBoolean("loading", False))
         while cursor.moveToNext():
             mime = cursor.getString(2)
             entries.append(
@@ -181,23 +183,44 @@ def _rows(uri) -> list[Entry]:
                     is_dir=(mime == DIR_MIME),
                     size=None if cursor.isNull(3) else int(cursor.getLong(3)),
                     flags=0 if cursor.isNull(4) else int(cursor.getInt(4)),
+                    mime="" if mime is None else str(mime),
+                    modified=0 if cursor.isNull(5) else int(cursor.getLong(5)),
                 )
             )
     finally:
         cursor.close()
-    return entries
+    return Listing(entries, loading)
 
 
 def describe(tree, doc_id: str) -> Entry:
-    rows = _rows(_doc_uri(tree, doc_id))
+    rows = _rows(_doc_uri(tree, doc_id)).entries
     if not rows:
         raise StorageError("The storage app no longer knows that item")
     return rows[0]
 
 
-def children(tree, parent_id: str) -> list[Entry]:
+def listing(tree, parent_id: str) -> Listing:
+    """What a folder holds, and whether the storage app is still counting."""
     uri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent_id)
     return _rows(uri)
+
+
+def children(tree, parent_id: str) -> list[Entry]:
+    return listing(tree, parent_id).entries
+
+
+def thumbnail(tree, doc_id: str, side: int):
+    """A small square picture of a file, from the storage app; None if it
+    has none to give. Slow for cloud storage: not for the screen's thread."""
+    try:
+        picture = DocumentsContract.getDocumentThumbnail(
+            resolver(), _doc_uri(tree, doc_id), Point(side, side), None
+        )
+    except Exception:
+        return None
+    if picture is None:
+        return None
+    return ThumbnailUtils.extractThumbnail(picture, side, side)
 
 
 # --- creating ----------------------------------------------------------------
@@ -260,24 +283,6 @@ def read_uri(uri) -> bytes:
     finally:
         stream.close()
     return bytes(collected)
-
-
-def display_name(uri) -> str:
-    """The filename behind an address handed over by a picker."""
-    cursor = resolver().query(uri, jarray(String)(["_display_name"]), None, None, None)
-    if cursor is None:
-        return "photo"
-    try:
-        if cursor.moveToFirst() and not cursor.isNull(0):
-            return str(cursor.getString(0))
-    finally:
-        cursor.close()
-    return "photo"
-
-
-def folder_address(tree, doc_id: str):
-    """A folder's plain address, for opening a picker at that folder."""
-    return DocumentsContract.buildDocumentUri(tree.getAuthority(), doc_id)
 
 
 def save_to_gallery(name: str, jpeg: bytes) -> None:
