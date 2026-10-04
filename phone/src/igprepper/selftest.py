@@ -715,6 +715,9 @@ async def starting_again(app) -> None:
         for browser in app.browsers:
             browser.tree, browser.trail, browser.entries = None, [], []
             browser.checked = set()
+            # A fresh launch starts with empty screens; so must this.
+            browser.show_path()
+            browser.show_rows(fresh=True)
 
     # As after closing the app: nothing in memory, the record on disk.
     forget()
