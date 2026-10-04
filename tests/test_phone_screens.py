@@ -64,9 +64,14 @@ class Phone:
                 press()
             if coroutine is not None:
                 await coroutine
-            for _ in range(500):
+            mine = asyncio.current_task()
+            for _ in range(1000):
                 await asyncio.sleep(0.01)
-                if not self.app.busy and not self.loading():
+                # Settled means nothing in hand and nothing started on the
+                # side: some things the app does, such as re-reading a folder
+                # on being returned to, are set going and not waited for.
+                others = [t for t in asyncio.all_tasks() if t is not mine and not t.done()]
+                if not self.app.busy and not self.loading() and not others:
                     return
             raise AssertionError("the app did not settle")
 
