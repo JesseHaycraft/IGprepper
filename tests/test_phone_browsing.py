@@ -276,9 +276,10 @@ def test_only_a_few_are_fetched_at_once_and_the_latest_shown_go_first():
         fetch.gate.set()
         await settle(thumbs)
         assert fetch.most_at_once <= 2
-        # a and b went straight out; of the rest, the last asked for led.
-        # (Those two run side by side, so either may report first.)
-        assert set(fetch.asked[:2]) == {"a", "b"} and fetch.asked[2] == "f"
+        # a and b went straight out; of the rest, the last two asked for
+        # led. (Each pair runs side by side, so either may report first.)
+        assert set(fetch.asked[:2]) == {"a", "b"}
+        assert set(fetch.asked[2:4]) == {"e", "f"}
         assert sorted(fetch.asked) == list("abcdef")
 
     run(scenario())
