@@ -157,6 +157,15 @@ def angle_label(angle: int) -> str:
     return f"{sign}{abs(angle)}\u00b0"
 
 
+def small_copy(jpeg: bytes, side: int = 320) -> Image.Image:
+    """A small version of a finished photo, to show in a list."""
+    with Image.open(io.BytesIO(jpeg)) as image:
+        # Lets the decoder skip most of the work for a picture this small.
+        image.draft("RGB", (side, side))
+        image.thumbnail((side, side))
+        return image.convert("RGB")
+
+
 def output_name(source_name: str, taken) -> str:
     """The desktop's default name for a framed photo, kept clear of `taken`.
 

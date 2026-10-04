@@ -43,6 +43,29 @@ def selected(count: int) -> str:
     return f"{count} selected"
 
 
+def local_path(folder_id: str, names: list[str]) -> str:
+    """The path of a folder on the phone itself.
+
+    Android identifies such a folder by its path, after the name of the
+    storage it is on: "primary:DCIM/Camera".
+    """
+    volume, colon, rest = folder_id.partition(":")
+    if not colon:
+        return "/".join(names)
+    start = "Internal storage" if volume == "primary" else "SD card"
+    return f"{start}/{rest}" if rest else start
+
+
+def remote_path(storage_app: str, names: list[str]) -> str:
+    """The path of a folder in another app's storage.
+
+    Android says nothing of what lies above the folder that was granted, so
+    this begins there, after the storage app's name.
+    """
+    path = "/".join(names)
+    return f"{storage_app}: {path}" if storage_app else path
+
+
 def photos(count: int) -> str:
     return "1 photo" if count == 1 else f"{count} photos"
 

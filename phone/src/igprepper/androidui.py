@@ -212,3 +212,143 @@ class BackButton:
         else:
             dispatcher.unregisterOnBackInvokedCallback(self.callback)
         self.listening = on
+
+
+# --- pieces of the main screen -------------------------------------------------
+
+Color = jclass("android.graphics.Color")
+GradientDrawable = jclass("android.graphics.drawable.GradientDrawable")
+MotionEvent = jclass("android.view.MotionEvent")
+RelativeLayout = jclass("android.widget.RelativeLayout")
+RelativeLayoutParams = jclass("android.widget.RelativeLayout$LayoutParams")
+TextView = jclass("android.widget.TextView")
+TypedValue = jclass("android.util.TypedValue")
+View = jclass("android.view.View")
+
+_FILL = -1  # Android's "as big as the parent"
+
+
+def end_showing_text(holder, colour: str, size_sp: float):
+    """A line of text that keeps its end in view.
+
+    Short text sits at the left. Text too long for the space loses its
+    beginning, marked with an ellipsis, so that the end is always there to
+    read: for a path, the end is the part that says where you are.
+
+    The toolkit's own label cannot do this. It insists on being as wide as
+    its text, and pushes the rest of the screen off the edge.
+    """
+    text = TextView(activity())
+    text.setSingleLine(True)
+    text.setEllipsize(TruncateAt.START)
+    text.setGravity(Gravity.START | Gravity.CENTER_VERTICAL)
+    text.setTextColor(Color.parseColor(colour))
+    text.setTextSize(TypedValue.COMPLEX_UNIT_SP, size_sp)
+    holder.addView(text, RelativeLayoutParams(_FILL, _FILL))
+    return text
+
+
+class _Drag(dynamic_proxy(View.OnTouchListener)):
+    def __init__(self, on_start, on_move, on_end, on_error) -> None:
+        super().__init__()
+        self.on_start, self.on_move, self.on_end = on_start, on_move, on_end
+        self.on_error = on_error
+        self.origin = 0.0
+
+    def onTouch(self, view, event) -> bool:
+        try:
+            action = event.getActionMasked()
+            # Measured against the screen, not the handle: the handle moves.
+            y = float(event.getRawY())
+            if action == MotionEvent.ACTION_DOWN:
+                self.origin = y
+                self.on_start()
+            elif action == MotionEvent.ACTION_MOVE:
+                self.on_move(y - self.origin)
+            elif action in (MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL):
+                self.on_end()
+        except Exception:
+            self.on_error()
+        return True
+
+
+def drag_handle(holder, on_start, on_move, on_end, on_error):
+    """Make `holder` a handle to drag up and down, with a grip drawn on it
+    like the one on a sheet that slides up from the bottom of the screen.
+
+    `on_move` is given how far down the finger is from where it began.
+    Returns the listener, which the caller must keep hold of.
+    """
+    grip = View(activity())
+    bar = GradientDrawable()
+    bar.setColor(Color.parseColor("#80868B"))
+    bar.setCornerRadius(dp(2))
+    grip.setBackground(bar)
+    middle = RelativeLayoutParams(dp(44), dp(4))
+    middle.addRule(RelativeLayout.CENTER_IN_PARENT)
+    holder.addView(grip, middle)
+
+    listener = _Drag(on_start, on_move, on_end, on_error)
+    holder.setOnTouchListener(listener)
+    return listener
+
+
+def outline_dropdown(spinner, colour: str) -> None:
+    """Give a drop-down's opened menu an edge of its own.
+
+    Android draws the opened menu flat against the screen, in the same
+    lettering as whatever lies beside it, so the two run together.
+    """
+    panel = GradientDrawable()
+    panel.setColor(Color.parseColor("#2E3035"))
+    panel.setStroke(dp(1.5), Color.parseColor(colour))
+    panel.setCornerRadius(dp(8))
+    spinner.setPopupBackgroundDrawable(panel)
+    spinner.setDropDownVerticalOffset(dp(6))
+
+
+class Returns:
+    """Tells the app when it has been come back to, from another app or from
+    the home screen. What was on screen may be out of date by then."""
+
+    def __init__(self, action) -> None:
+        interface = jclass("android.app.Application$ActivityLifecycleCallbacks")
+
+        class Callbacks(dynamic_proxy(interface)):
+            def onActivityResumed(self, activity_) -> None:
+                action()
+
+            # The rest of what Android reports is of no interest here, but
+            # every one has to be answered.
+            def onActivityCreated(self, activity_, state) -> None: ...
+            def onActivityStarted(self, activity_) -> None: ...
+            def onActivityPaused(self, activity_) -> None: ...
+            def onActivityStopped(self, activity_) -> None: ...
+            def onActivitySaveInstanceState(self, activity_, state) -> None: ...
+            def onActivityDestroyed(self, activity_) -> None: ...
+            def onActivityPreCreated(self, activity_, state) -> None: ...
+            def onActivityPostCreated(self, activity_, state) -> None: ...
+            def onActivityPreStarted(self, activity_) -> None: ...
+            def onActivityPostStarted(self, activity_) -> None: ...
+            def onActivityPreResumed(self, activity_) -> None: ...
+            def onActivityPostResumed(self, activity_) -> None: ...
+            def onActivityPrePaused(self, activity_) -> None: ...
+            def onActivityPostPaused(self, activity_) -> None: ...
+            def onActivityPreStopped(self, activity_) -> None: ...
+            def onActivityPostStopped(self, activity_) -> None: ...
+            def onActivityPreSaveInstanceState(self, activity_, state) -> None: ...
+            def onActivityPostSaveInstanceState(self, activity_, state) -> None: ...
+            def onActivityPreDestroyed(self, activity_) -> None: ...
+            def onActivityPostDestroyed(self, activity_) -> None: ...
+
+        self.callbacks = Callbacks()
+        activity().registerActivityLifecycleCallbacks(self.callbacks)
+
+
+def press_back() -> None:
+    """Press the phone's Back key, as far as this app's own windows go.
+
+    For the build's own check, to close a menu it has opened. Must not be
+    called from the screen's thread.
+    """
+    jclass("android.app.Instrumentation")().sendKeyDownUpSync(4)

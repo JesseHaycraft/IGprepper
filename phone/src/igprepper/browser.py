@@ -19,7 +19,7 @@ import asyncio
 
 import toga
 from toga.style import Pack
-from toga.style.pack import COLUMN, ROW
+from toga.style.pack import CENTER, ROW
 
 from . import androidui, entries, storage, words
 from .filelist import FileList
@@ -55,12 +55,17 @@ class Browser:
     # --- the screen -------------------------------------------------------------
 
     def build(self) -> None:
+        """The pieces of this half of the screen. The app stacks them:
+        `rows`, then `holder`, which is the part that stretches."""
         app = self.app
         heading = toga.Label(
             self.title, style=Pack(font_weight="bold", font_size=11)
         )
-        self.path_label = toga.Label(
-            "", style=Pack(color=DIM, font_size=9, margin_top=2)
+        # The path sits beside the heading, in whatever room is left.
+        self.path_holder = toga.Box(style=Pack(flex=1, height=24, margin_left=10))
+        top = toga.Box(
+            children=[heading, self.path_holder],
+            style=Pack(direction=ROW, align_items=CENTER),
         )
 
         self.up_btn = app.button("Up", self.up, icon="up", flex=1)
@@ -76,21 +81,25 @@ class Browser:
             "Change", self.choose, icon="folder", flex=1, margin_left=6
         )
         tools.append(self.choose_btn)
+        # List or tiles. Only offered once there is a folder to look at:
+        # before that the row is needed for the words "Choose folder".
+        self.view_btn = app.button(
+            "", self.toggle_view, icon="tiles", width=52, margin_left=6
+        )
+        self.view_offered = False
+        self.tools = toga.Box(children=tools, style=Pack(direction=ROW, margin_top=2))
 
         self.holder = toga.Box(style=Pack(flex=1, margin_top=4))
-        self.box = toga.Box(
-            children=[
-                heading, self.path_label,
-                toga.Box(children=tools, style=Pack(direction=ROW, margin_top=4)),
-                self.holder,
-            ],
-            style=Pack(direction=COLUMN, flex=1),
-        )
+        self.rows = [top, self.tools]
+        self.path_view = None
         app.guard(f"building the {self.side} list", self.build_list)
         self.show_path()
         self.show_rows(fresh=True)
 
     def build_list(self) -> None:
+        self.path_view = androidui.end_showing_text(
+            self.path_holder._impl.native, DIM, 13
+        )
         self.files = FileList(
             self.holder._impl.native, self.app.loop, self.app.log,
             self.app.icon_bitmap, self.pressed,
@@ -100,6 +109,7 @@ class Browser:
         app = self.app
         app.switch(self.choose_btn, free)
         app.switch(self.up_btn, free and len(self.trail) > 1)
+        app.switch(self.view_btn, free and self.tree is not None)
         if self.new_btn is not None:
             app.switch(self.new_btn, free and self.tree is not None)
 
@@ -111,14 +121,47 @@ class Browser:
     def folder_name(self) -> str | None:
         return self.trail[-1][1] if self.tree is not None else None
 
-    def show_path(self) -> None:
+    @property
+    def path(self) -> str:
+        """What the line beside the heading says."""
         if self.tree is None:
-            self.path_label.text = "No folder chosen"
-        else:
-            self.path_label.text = words.trail([name for _, name in self.trail], 50)
+            return "No folder chosen"
+        return storage.where(self.tree, self.trail)
+
+    @property
+    def view_key(self) -> str:
+        """What this folder is remembered by, for how it was last shown."""
+        return f"{storage.address(self.tree)}\n{self.here}"
+
+    @property
+    def tiled(self) -> bool:
+        return self.tree is not None and self.app.views.is_tiled(self.view_key)
+
+    def show_path(self) -> None:
+        if self.path_view is not None:
+            self.path_view.setText(self.path)
         self.app.relabel(
             self.choose_btn, "Change" if self.tree is not None else "Choose folder"
         )
+        offered = self.tree is not None
+        if offered != self.view_offered:
+            self.view_offered = offered
+            if offered:
+                self.tools.add(self.view_btn)
+            else:
+                self.tools.remove(self.view_btn)
+        # The button shows the way of looking that pressing it would give.
+        self.app.reicon(self.view_btn, "list" if self.tiled else "tiles")
+
+    def toggle_view(self, widget=None) -> None:
+        if self.app.busy or self.tree is None:
+            return
+        self.app.guard(
+            "noting how a folder is shown",
+            lambda: self.app.views.set_tiled(self.view_key, not self.tiled),
+        )
+        self.show_path()
+        self.show_rows(fresh=True)
 
     def show_rows(self, fresh: bool = False) -> None:
         """Put the current entries, marks and messages on screen."""
@@ -130,9 +173,10 @@ class Browser:
             tree = self.tree
             fetch = None
             if tree is not None:
-                side = files.thumb_px
-                fetch = lambda doc_id: storage.thumbnail(tree, doc_id, side)  # noqa: E731
-            files.show(self.entries, fetch, selectable=self.selects)
+                fetch = lambda doc_id, side: storage.thumbnail(tree, doc_id, side)  # noqa: E731
+            files.show(
+                self.entries, fetch, selectable=self.selects, tiles=self.tiled
+            )
         else:
             files.update(self.entries)
 
@@ -309,10 +353,13 @@ class Browser:
         if found.loading:
             self.app.loop.call_later(RECHECK_SECONDS, self.recheck, visit, 1)
 
-    async def reload(self) -> None:
-        """Read the same folder again, keeping what is checked."""
+    async def reload(self, ask_again: bool = False) -> None:
+        """Read the same folder again, keeping what is checked. `ask_again`
+        also has another go at any pictures that were not there before."""
         if self.tree is None:
             return
+        if ask_again and self.files is not None:
+            self.files.thumbs.ask_again()
         visit = self.visit
         found = await self.app.work(storage.listing, self.tree, self.here)
         if visit == self.visit:

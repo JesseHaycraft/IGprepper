@@ -19,6 +19,7 @@ from java import jarray, jbyte, jclass
 from java.lang import String
 from org.beeware.android import MainActivity
 
+from . import words
 from .entries import DIR_MIME, Entry
 
 DocumentsContract = jclass("android.provider.DocumentsContract")
@@ -155,6 +156,27 @@ def root_id(tree) -> str:
 def provider_name(tree) -> str:
     """Which app owns this storage. An app identifier, not personal data."""
     return str(tree.getAuthority())
+
+
+def provider_label(tree) -> str:
+    """The storage app's name as its owner wrote it, such as "Drive"."""
+    try:
+        packages = MainActivity.singletonThis.getPackageManager()
+        provider = packages.resolveContentProvider(str(tree.getAuthority()), 0)
+        return "" if provider is None else str(provider.loadLabel(packages))
+    except Exception:
+        return ""
+
+
+def where(tree, trail) -> str:
+    """The path of the folder at the end of `trail`, as fully as it can be
+    known. On the phone's own storage that is the whole path. In another
+    app's storage, Android reveals nothing above the folder that was
+    granted, so the path starts there."""
+    names = [name for _, name in trail]
+    if str(tree.getAuthority()) == LOCAL_STORAGE:
+        return words.local_path(trail[-1][0], names)
+    return words.remote_path(provider_label(tree), names)
 
 
 def _doc_uri(tree, doc_id: str):

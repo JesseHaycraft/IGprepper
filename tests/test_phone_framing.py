@@ -188,3 +188,12 @@ def test_guided_preview_keeps_its_size_and_leaves_the_original_alone():
 )
 def test_angle_label(angle, label):
     assert framing.angle_label(angle) == label
+
+
+def test_small_copy_of_a_saved_photo_is_small_and_whole():
+    image = Image.new("RGB", (3000, 2000), (200, 90, 60))
+    jpeg = framing.frame(image, Framing()).jpeg
+    small = framing.small_copy(jpeg)
+    assert max(small.size) <= 320 and small.mode == "RGB"
+    assert abs(small.width / small.height - 0.75) < 0.02
+    assert small.getpixel((2, 2))[0] > 240  # the frame is still round it

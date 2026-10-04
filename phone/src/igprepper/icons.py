@@ -113,6 +113,19 @@ def _checked(pen: _Pen) -> None:
     pen.line([(7.6, 12.4), (10.6, 15.4), (16.4, 9.2)], width=2.0, ink=0)
 
 
+def _tiles(pen: _Pen) -> None:
+    for left, top in ((4, 4), (13.5, 4), (4, 13.5), (13.5, 13.5)):
+        pen.shape([
+            (left, top), (left + 6.5, top), (left + 6.5, top + 6.5), (left, top + 6.5),
+        ])
+
+
+def _list(pen: _Pen) -> None:
+    for y in (6.5, 12, 17.5):
+        pen.dot((5, y), 1.3)
+        pen.line([(9.5, y), (20, y)])
+
+
 # name -> (how to draw it, whether to mirror the drawing left to right)
 _ICONS = {
     "folder": (_folder, False),
@@ -128,6 +141,8 @@ _ICONS = {
     "file": (_file, False),
     "unchecked": (_circle, False),
     "checked": (_checked, False),
+    "tiles": (_tiles, False),
+    "list": (_list, False),
 }
 NAMES = tuple(_ICONS)
 

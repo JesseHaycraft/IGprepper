@@ -277,7 +277,8 @@ def test_only_a_few_are_fetched_at_once_and_the_latest_shown_go_first():
         await settle(thumbs)
         assert fetch.most_at_once <= 2
         # a and b went straight out; of the rest, the last asked for led.
-        assert fetch.asked[:2] == ["a", "b"] and fetch.asked[2] == "f"
+        # (Those two run side by side, so either may report first.)
+        assert set(fetch.asked[:2]) == {"a", "b"} and fetch.asked[2] == "f"
         assert sorted(fetch.asked) == list("abcdef")
 
     run(scenario())
@@ -352,3 +353,193 @@ def test_nothing_is_fetched_before_a_folder_is_shown():
         assert not thumbs.waiting and not thumbs.fetching
 
     run(scenario())
+
+
+# --- pictures that are not there yet -------------------------------------------
+
+class Clock:
+    """A loop whose time can be moved on by hand."""
+
+    def __init__(self, loop):
+        self._loop = loop
+        self.ahead = 0.0
+        self.later = []
+
+    def time(self):
+        return self._loop.time() + self.ahead
+
+    def run_in_executor(self, *args):
+        return self._loop.run_in_executor(*args)
+
+    def call_soon_threadsafe(self, *args):
+        return self._loop.call_soon_threadsafe(*args)
+
+    def call_later(self, delay, callback, *args):
+        self.later.append((delay, callback, args))
+
+
+def test_a_missing_picture_is_asked_for_again_later_and_then_shown():
+    async def scenario():
+        clock = Clock(asyncio.get_running_loop())
+        arrivals = []
+        fetch = Fetcher(missing={"a"})
+        thumbs = Thumbnails(clock, lambda: arrivals.append(1))
+        thumbs.start(fetch)
+        thumbs.get("a")
+        await settle(thumbs)
+        assert fetch.asked == ["a"]
+        # A redraw was booked for when it will be worth asking again.
+        assert len(clock.later) == 1 and clock.later[0][0] > 4
+
+        thumbs.get("a")  # too soon: nothing happens
+        await settle(thumbs)
+        assert fetch.asked == ["a"]
+
+        clock.ahead = 5
+        fetch.missing.clear()  # the storage app has caught up
+        thumbs.get("a")
+        await settle(thumbs)
+        assert fetch.asked == ["a", "a"] and thumbs.get("a") == "picture of a"
+
+    run(scenario())
+
+
+def test_a_picture_that_never_comes_is_given_up_on():
+    async def scenario():
+        clock = Clock(asyncio.get_running_loop())
+        fetch = Fetcher(missing={"a"})
+        thumbs = Thumbnails(clock, lambda: None)
+        thumbs.start(fetch)
+        for _ in range(8):
+            thumbs.get("a")
+            await settle(thumbs)
+            clock.ahead += 100
+        assert fetch.asked == ["a"] * 4  # once, and three more tries
+
+    run(scenario())
+
+
+def test_asking_again_forgets_only_the_misses():
+    async def scenario():
+        fetch = Fetcher(missing={"gone"})
+        thumbs = Thumbnails(asyncio.get_running_loop(), lambda: None)
+        thumbs.start(fetch)
+        thumbs.get("here"), thumbs.get("gone")
+        await settle(thumbs)
+        thumbs.ask_again()
+        assert "here" in thumbs.cache and "gone" not in thumbs.cache
+        fetch.missing.clear()
+        thumbs.get("gone")
+        await settle(thumbs)
+        assert thumbs.get("gone") == "picture of gone"
+
+    run(scenario())
+
+
+def test_a_picture_already_to_hand_can_be_supplied_and_is_never_fetched():
+    async def scenario():
+        fetch = Fetcher()
+        thumbs = Thumbnails(asyncio.get_running_loop(), lambda: None)
+        thumbs.start(fetch)
+        thumbs.put("saved", "the picture itself")
+        assert thumbs.get("saved") == "the picture itself"
+        await settle(thumbs)
+        assert fetch.asked == []
+
+    run(scenario())
+
+
+def test_the_number_kept_can_change_with_the_folder():
+    async def scenario():
+        thumbs = Thumbnails(asyncio.get_running_loop(), lambda: None, keep=400)
+        thumbs.start(Fetcher(), keep=2)
+        for key in "abc":
+            thumbs.put(key, key)
+        assert list(thumbs.cache) == ["b", "c"]
+
+    run(scenario())
+
+
+# --- how the screen was left ------------------------------------------------------
+
+from igprepper.views import Views, divide  # noqa: E402
+
+
+def test_folders_are_lists_until_told_otherwise(tmp_path):
+    views = Views(tmp_path / "views.json")
+    assert not views.is_tiled("tree\nfolder")
+    assert views.split == 0.5
+
+
+def test_tiles_are_remembered_per_folder_and_across_launches(tmp_path):
+    path = tmp_path / "private" / "views.json"
+    views = Views(path)
+    views.set_tiled("tree\nholiday", True)
+    views.set_tiled("tree\nwork", True)
+    views.set_tiled("tree\nwork", False)
+    views.set_split(0.3)
+
+    again = Views(path)
+    assert again.is_tiled("tree\nholiday") and not again.is_tiled("tree\nwork")
+    assert not again.is_tiled("other tree\nholiday")
+    assert again.split == 0.3
+
+
+def test_only_so_many_folders_are_remembered(tmp_path):
+    from igprepper import views as module
+
+    views = Views(tmp_path / "views.json")
+    for number in range(module.MOST_FOLDERS + 10):
+        views.set_tiled(f"folder {number}", True)
+    assert len(views.tiled) == module.MOST_FOLDERS
+    assert not views.is_tiled("folder 0") and views.is_tiled(f"folder {module.MOST_FOLDERS + 9}")
+
+
+@pytest.mark.parametrize(
+    "contents", ["", "nonsense", "[]", '{"tiled": 5}', '{"split": 7}', '{"split": true}']
+)
+def test_a_damaged_views_file_is_ignored(tmp_path, contents):
+    path = tmp_path / "views.json"
+    path.write_text(contents, encoding="utf-8")
+    views = Views(path)
+    assert views.tiled == [] and views.split == 0.5
+
+
+def test_the_divider_follows_the_finger():
+    assert divide(300, 300, 60, 40) == 360
+    assert divide(300, 300, -60, 40) == 240
+
+
+def test_the_divider_always_leaves_some_of_each_list():
+    assert divide(300, 300, 9000, 40) == 560   # 40 of the lower list left
+    assert divide(300, 300, -9000, 40) == 40   # 40 of the upper
+    assert divide(40, 560, -10, 40) == 40      # already at the stop
+
+
+def test_the_divider_does_not_move_on_a_screen_too_small_for_it():
+    assert divide(30, 30, 10, 40) is None
+
+
+def test_a_stored_split_is_kept_away_from_the_very_ends(tmp_path):
+    views = Views(tmp_path / "views.json")
+    views.set_split(1.7)
+    assert views.split == 0.99
+    views.set_split(-3)
+    assert views.split == 0.01
+
+
+# --- the path beside each heading ---------------------------------------------------
+
+def test_a_folder_on_the_phone_shows_its_whole_path():
+    assert words.local_path("primary:DCIM/Camera", ["Camera"]) == "Internal storage/DCIM/Camera"
+    assert words.local_path("primary:", ["whatever"]) == "Internal storage"
+    assert words.local_path("1A2B-3C4D:Photos", ["Photos"]) == "SD card/Photos"
+
+
+def test_an_unrecognised_folder_id_falls_back_to_the_names():
+    assert words.local_path("opaque", ["Top", "Next"]) == "Top/Next"
+
+
+def test_a_folder_in_another_apps_storage_starts_at_what_was_granted():
+    assert words.remote_path("Drive", ["Photos", "2026"]) == "Drive: Photos/2026"
+    assert words.remote_path("", ["Photos", "2026"]) == "Photos/2026"

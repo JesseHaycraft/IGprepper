@@ -43,6 +43,7 @@ from . import (
     places,
     storage,
     touch,
+    views,
     words,
 )
 from .browser import Browser
@@ -67,6 +68,13 @@ FIT_CHOICES = {
 # How long the guide lines stay after the last press of a rotation button.
 GUIDE_SECONDS = 3
 KEPT_LOGS = 10
+# The frame's width when the editor opens, as a percentage of the picture's.
+BORDER_PCT = 3.0
+# The divider can be dragged until this much of a list is left, and no
+# further: enough to see that it is there, and to drag it back.
+LEAST_LIST_DP = 28
+# Coming back to the app re-reads the folders, but not more often than this.
+REREAD_SECONDS = 2.0
 
 
 @dataclass
@@ -114,6 +122,11 @@ class IGprepper(toga.App):
         self.drawn_icons: dict[tuple[str, str], object] = {}
         self.icon_bitmaps: dict[tuple[str, str], object] = {}
         self.back = androidui.BackButton(self.on_back)
+        self.views = views.Views(self.paths.data / "views.json")
+        self.split_from: tuple[int, int] | None = None
+        self.split_to: float | None = None
+        self.split_due = False
+        self.reread_at = 0.0
 
         self.build_home()
         self.build_editor()
@@ -123,13 +136,15 @@ class IGprepper(toga.App):
 
         self.guard("describing the phone", self.report_environment)
         self.guard("darkening the system bars", self.darken_system_bars)
+        self.guard("watching for the app being returned to", self.watch_returns)
         self.refresh_controls()
 
     # --- the two screens ------------------------------------------------------
 
     def build_home(self) -> None:
-        """Two folder browsers, and between them the button that sends the
-        checked photos from one towards the other."""
+        """Two folder browsers, one above the other, with a divider between
+        them that can be dragged, and the button that sends the checked
+        photos from the upper towards the lower."""
         self.source = Browser(
             self, "input", "Input folder", selects=True,
             ask="Choose the folder your photos are in",
@@ -140,22 +155,98 @@ class IGprepper(toga.App):
         )
         self.browsers = (self.source, self.target)
 
+        self.divider = toga.Box(style=Pack(height=22))
+        self.guard("making the divider draggable", self.make_divider)
         self.process_btn = self.button(
-            "Process selected photos", self.process_selected, icon="photo",
-            kind="primary", margin_top=8,
+            "Frame selected photos", self.process_selected, icon="photo",
+            kind="primary", margin_bottom=6,
         )
         self.gallery_switch = toga.Switch(
             "Also save to this phone\u2019s gallery", value=True,
-            style=Pack(margin_top=2, margin_bottom=6),
+            style=Pack(margin_top=4),
         )
 
         self.home_box = toga.Box(
             children=[
-                self.source.box, self.process_btn, self.gallery_switch,
-                self.target.box,
+                *self.source.rows, self.source.holder,
+                self.divider, self.process_btn,
+                *self.target.rows, self.target.holder,
+                self.gallery_switch,
             ],
             style=Pack(direction=COLUMN, margin=12),
         )
+        self.apply_split(self.views.split)
+
+    # --- the divider ------------------------------------------------------------
+
+    def make_divider(self) -> None:
+        # Kept on the app so it is not swept away while Android still holds it.
+        self.divider_listener = androidui.drag_handle(
+            self.divider._impl.native, self.split_started, self.split_moved,
+            self.split_ended, lambda: self.log.exception("dragging the divider"),
+        )
+
+    def list_heights(self) -> tuple[int, int]:
+        """How tall each list is on screen at the moment, in its pixels."""
+        return tuple(
+            int(browser.holder._impl.native.getHeight()) for browser in self.browsers
+        )
+
+    def apply_split(self, share: float) -> None:
+        """Give the upper list this share of the room the two have."""
+        self.source.holder.style.flex = max(1, round(share * 1000))
+        self.target.holder.style.flex = max(1, round((1 - share) * 1000))
+
+    def split_started(self) -> None:
+        self.split_from = self.list_heights()
+
+    def split_moved(self, down: float) -> None:
+        if self.split_from is None:
+            return
+        upper, lower = self.split_from
+        height = views.divide(upper, lower, down, androidui.dp(LEAST_LIST_DP))
+        if height is None:
+            return
+        self.split_to = height / (upper + lower)
+        # Fingers report faster than the screen can be laid out again.
+        if not self.split_due:
+            self.split_due = True
+            self.loop.call_soon(self.split_now)
+
+    def split_now(self) -> None:
+        self.split_due = False
+        if self.split_to is not None:
+            self.guard("moving the divider", lambda: self.apply_split(self.split_to))
+
+    def split_ended(self) -> None:
+        self.split_from = None
+        if self.split_to is not None:
+            share = self.split_to
+            self.guard("noting where the divider is", lambda: self.views.set_split(share))
+
+    # --- coming back to the app ---------------------------------------------------
+
+    def watch_returns(self) -> None:
+        self.returns = androidui.Returns(self.returned)
+
+    def returned(self) -> None:
+        """The app is on screen again. Files may have arrived, gone, or
+        gained a picture while it was not, so both folders are read again."""
+        if self.busy or self.main_window.content is not self.home_box:
+            return
+        now = time.monotonic()
+        if now - self.reread_at < REREAD_SECONDS:
+            return
+        self.reread_at = now
+        for browser in self.browsers:
+            if browser.tree is not None:
+                asyncio.ensure_future(self.reread(browser))
+
+    async def reread(self, browser) -> None:
+        try:
+            await browser.reload(ask_again=True)
+        except Exception:
+            self.log.exception(f"re-reading the {browser.side} folder")
 
     def build_editor(self) -> None:
         """The photo on top, everything that changes it beneath."""
@@ -218,9 +309,15 @@ class IGprepper(toga.App):
         )
         self.border_value = toga.Label("", style=Pack(width=44))
         self.border_slider = toga.Slider(
-            min=0, max=15, value=g.DEFAULT_BORDER_PCT, tick_count=31,
+            min=0, max=15, value=BORDER_PCT, tick_count=31,
             on_change=self.update_preview, style=Pack(flex=1),
         )
+
+        for menu in (self.ratio_select, self.fit_select):
+            self.guard(
+                "outlining a menu",
+                lambda m=menu: androidui.outline_dropdown(m._impl.native, ACCENT),
+            )
 
         self.cancel_btn = self.button(
             "Cancel", self.cancel_editing, icon="close", flex=1, height=52
@@ -396,7 +493,7 @@ class IGprepper(toga.App):
 
     def dress(self, button: toga.Button, on: bool) -> None:
         look = self.looks[button]
-        state = (on, look.text)
+        state = (on, look.text, look.icon)
         if look.shown == state:
             return
         look.shown = state
@@ -414,6 +511,10 @@ class IGprepper(toga.App):
 
     def relabel(self, button: toga.Button, text: str) -> None:
         self.looks[button].text = text
+        self.dress(button, bool(button.enabled))
+
+    def reicon(self, button: toga.Button, icon: str) -> None:
+        self.looks[button].icon = icon
         self.dress(button, bool(button.enabled))
 
     def switch(self, button: toga.Button, on: bool) -> None:
@@ -757,7 +858,7 @@ class IGprepper(toga.App):
         here = target.here if target.tree is not None else None
         folder = target.folder_name
         total = len(self.picked)
-        saved = await self.work(
+        saved, pictures = await self.work(
             self.save_framed_now, list(self.picked), self.current_framing(),
             dict(self.placements), to_gallery, target.tree, here,
         )
@@ -770,6 +871,14 @@ class IGprepper(toga.App):
             if browser.tree is not None and (
                 browser is target or browser.place() == target.place()
             ):
+                # Cloud storage has no thumbnail for a file it was handed a
+                # moment ago. This app has the picture itself, so it shows
+                # that rather than a blank.
+                for doc_id, picture in pictures.items():
+                    self.guard(
+                        "showing a saved photo",
+                        lambda d=doc_id, p=picture: browser.files.seed(d, p),
+                    )
                 await browser.reload()
         if saved == total:
             self.announce(
@@ -789,10 +898,11 @@ class IGprepper(toga.App):
 
     def save_framed_now(
         self, picked, chosen: Framing, placements, to_gallery, tree, here
-    ) -> int:
+    ) -> tuple[int, dict]:
         """One photo at a time, start to finish, so memory stays flat.
 
-        Returns how many were saved.
+        Returns how many were saved, and a small picture of each file put in
+        the folder, by the name the storage app knows it by.
         """
         log = self.log
         log.section("Saving framed photos")
@@ -806,6 +916,7 @@ class IGprepper(toga.App):
             taken = {entry.name for entry in storage.children(tree, here)}
 
         saved = 0
+        pictures: dict[str, Image.Image] = {}
         for number, (address, name) in enumerate(picked, start=1):
             self.loop.call_soon_threadsafe(self.show_progress, number, len(picked))
             try:
@@ -823,6 +934,7 @@ class IGprepper(toga.App):
                 if tree is not None:
                     entry = storage.create_file(tree, here, out, "image/jpeg")
                     storage.write_bytes(tree, entry.doc_id, result.jpeg)
+                    pictures[entry.doc_id] = framing.small_copy(result.jpeg)
                 if to_gallery:
                     storage.save_to_gallery(out, result.jpeg)
                 saved += 1
@@ -847,7 +959,7 @@ class IGprepper(toga.App):
             except Exception:
                 log.exception(f"framing photo {number} of {len(picked)}")
         log.write("Framed photos finished.")
-        return saved
+        return saved, pictures
 
 
 def main() -> IGprepper:

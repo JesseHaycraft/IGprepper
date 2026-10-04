@@ -5,10 +5,12 @@ dozen rows and hopeless for a camera folder with thousands. Android's own
 list keeps only the rows on screen and reuses them as they scroll off, so
 this hands it the rows one at a time as it asks.
 
-Each row is, for a photo that can be chosen, a mark showing whether it has
-been; then a small picture and a name. Over the list sit a line of text for
-when there is nothing to list, and a counter in the bottom right corner. The
-marks are on the left so that the counter never sits on top of one.
+The same files can be shown two ways. As a list, each row is a mark (for a
+photo that can be chosen, showing whether it has been), a small picture and
+a name. As tiles, two across, each is a large picture with the mark in its
+corner and the name beneath. Over either sit a line of text for when there
+is nothing to show, and a counter in the bottom right corner. In the list
+the marks are on the left, so that the counter never sits on top of one.
 
 This module only imports on Android.
 """
@@ -16,14 +18,18 @@ This module only imports on Android.
 from __future__ import annotations
 
 from java import cast, dynamic_proxy, jclass
+from PIL import Image, ImageOps
 
 from . import androidui
 from .thumbs import Thumbnails
 
 AbsListLayout = jclass("android.widget.AbsListView$LayoutParams")
 Color = jclass("android.graphics.Color")
+FrameLayout = jclass("android.widget.FrameLayout")
+FrameLayoutParams = jclass("android.widget.FrameLayout$LayoutParams")
 GradientDrawable = jclass("android.graphics.drawable.GradientDrawable")
 Gravity = jclass("android.view.Gravity")
+GridView = jclass("android.widget.GridView")
 ImageView = jclass("android.widget.ImageView")
 ItemClick = jclass("android.widget.AdapterView$OnItemClickListener")
 LinearLayout = jclass("android.widget.LinearLayout")
@@ -41,9 +47,17 @@ View = jclass("android.view.View")
 ROW_DP = 48
 THUMB_DP = 36
 MARK_DP = 22
+COLUMNS = 2
+TILE_GAP_DP = 6
+# Tiles are wide, but a picture this many pixels across is plenty for one,
+# and a great deal less to keep in memory than a full-width one.
+TILE_THUMB_PX = 300
+# How many pictures to keep to hand: small ones are cheap, large ones not.
+KEEP_SMALL, KEEP_LARGE = 400, 80
 FILL, WRAP = -1, -2  # Android's "as big as the parent" and "as big as needed"
 
 PANEL = "#1D1E21"
+TILE = "#2A2C30"
 TEXT = "#E8EAED"
 FAINT = "#7D8388"
 ACCENT = "#8AB4F8"
@@ -52,11 +66,11 @@ CHECKED_ROW = "#263347"
 
 class _Adapter(dynamic_proxy(ListAdapter)):
     """Answers Android's questions about the list: how long, and what goes
-    in row so-and-so."""
+    in place so-and-so. There is one for the list and one for the tiles."""
 
-    def __init__(self, owner) -> None:
+    def __init__(self, owner, tiles: bool) -> None:
         super().__init__()
-        self.owner = owner
+        self.owner, self.tiles = owner, tiles
         self.observers = []
 
     def registerDataSetObserver(self, observer) -> None:
@@ -82,7 +96,7 @@ class _Adapter(dynamic_proxy(ListAdapter)):
         return False
 
     def getView(self, position, convert, parent):
-        return self.owner.row_view(position, convert)
+        return self.owner.item_view(position, convert, self.tiles)
 
     def getItemViewType(self, position) -> int:
         return 0
@@ -115,26 +129,39 @@ class _Press(dynamic_proxy(ItemClick)):
 class FileList:
     def __init__(self, holder, loop, log, icon, on_press) -> None:
         """`holder` is the Android view to fill. `icon(name, colour)` gives a
-        bitmap. `on_press(entry)` is called when a row is pressed."""
+        bitmap. `on_press(entry)` is called when a row or tile is pressed."""
         self.loop, self.log, self.icon, self.on_press = loop, log, icon, on_press
         self.rows: list = []
         self.checked: set[str] = set()
         self.selectable = False
+        self.tiles = False
         self.refresh_due = False
         self.thumbs = Thumbnails(loop, self.picture_arrived)
-        self.thumb_px = androidui.dp(THUMB_DP)
 
         context = androidui.activity()
         holder.setBackgroundColor(Color.parseColor(PANEL))
+        self.press = _Press(self)
 
         self.list = ListView(context)
         self.list.setDividerHeight(0)
         self.list.setFastScrollEnabled(True)
-        self.adapter = _Adapter(self)
-        self.press = _Press(self)
-        self.list.setAdapter(self.adapter)
+        self.list_adapter = _Adapter(self, tiles=False)
+        self.list.setAdapter(self.list_adapter)
         self.list.setOnItemClickListener(self.press)
         holder.addView(self.list, RelativeLayoutParams(FILL, FILL))
+
+        gap = androidui.dp(TILE_GAP_DP)
+        self.grid = GridView(context)
+        self.grid.setNumColumns(COLUMNS)
+        self.grid.setHorizontalSpacing(gap)
+        self.grid.setVerticalSpacing(gap)
+        self.grid.setPadding(gap, gap, gap, gap)
+        self.grid.setClipToPadding(False)
+        self.grid.setFastScrollEnabled(True)
+        self.grid_adapter = _Adapter(self, tiles=True)
+        self.grid.setAdapter(self.grid_adapter)
+        self.grid.setOnItemClickListener(self.press)
+        holder.addView(self.grid, RelativeLayoutParams(FILL, FILL))
 
         self.note = TextView(context)
         self.note.setTextColor(Color.parseColor(FAINT))
@@ -158,19 +185,46 @@ class FileList:
         corner.setMargins(0, 0, androidui.dp(10), androidui.dp(8))
         holder.addView(self.counter, corner)
 
+        self.arrange()
         self.say(None)
         self.count(None)
 
-    # --- what the list holds --------------------------------------------------
+    # --- what is shown ----------------------------------------------------------
 
-    def show(self, rows: list, fetch=None, *, selectable: bool = False) -> None:
-        """A different folder: new rows, back at the top, old pictures dropped.
-        `fetch(doc_id)` returns a thumbnail bitmap, or None."""
+    @property
+    def view(self):
+        """Whichever of the two is on screen."""
+        return self.grid if self.tiles else self.list
+
+    @property
+    def adapter(self):
+        return self.grid_adapter if self.tiles else self.list_adapter
+
+    @property
+    def thumb_px(self) -> int:
+        return TILE_THUMB_PX if self.tiles else androidui.dp(THUMB_DP)
+
+    def arrange(self) -> None:
+        self.list.setVisibility(View.GONE if self.tiles else View.VISIBLE)
+        self.grid.setVisibility(View.VISIBLE if self.tiles else View.GONE)
+
+    def show(
+        self, rows: list, fetch=None, *, selectable: bool = False, tiles: bool = False
+    ) -> None:
+        """A different folder, or the same one shown the other way: new
+        rows, back at the top, old pictures dropped. `fetch(doc_id, pixels)`
+        returns a thumbnail bitmap that many pixels square, or None."""
         self.rows = list(rows)
         self.selectable = selectable
-        self.thumbs.start(fetch)
+        self.tiles = tiles
+        self.arrange()
+        side = self.thumb_px
+        self.thumbs.start(
+            None if fetch is None else (lambda key: fetch(key, side)),
+            keep=KEEP_LARGE if tiles else KEEP_SMALL,
+        )
         self.adapter.changed()
-        self.list.setSelection(0)
+        self.view.setSelection(0)
 
     def update(self, rows: list | None = None) -> None:
         """The same folder, changed: rows added, or marks moved."""
@@ -178,8 +232,15 @@ class FileList:
             self.rows = list(rows)
         self.adapter.changed()
 
+    def seed(self, doc_id: str, picture: Image.Image) -> None:
+        """Give a file its picture directly, without asking the storage app:
+        for a photo this app has just written and so already has."""
+        side = self.thumb_px
+        square = ImageOps.fit(picture.convert("RGB"), (side, side))
+        self.thumbs.put(doc_id, androidui.bitmap(square))
+
     def say(self, text: str | None) -> None:
-        """Words in the middle of the list, for when it has nothing to show."""
+        """Words in the middle, for when there is nothing to show."""
         self.note.setText(text or "")
         self.note.setVisibility(View.VISIBLE if text else View.GONE)
 
@@ -188,7 +249,35 @@ class FileList:
         self.counter.setText(text or "")
         self.counter.setVisibility(View.VISIBLE if text else View.GONE)
 
-    # --- one row ----------------------------------------------------------------
+    # --- one row, or one tile -----------------------------------------------------
+
+    def item_view(self, position: int, convert, tiles: bool):
+        try:
+            if tiles:
+                tile = cast(LinearLayout, convert) if convert is not None else self.new_tile()
+                self.fill_tile(tile, self.rows[position])
+                return tile
+            row = cast(LinearLayout, convert) if convert is not None else self.new_row()
+            self.fill_row(row, self.rows[position])
+            return row
+        except Exception:
+            # Android asked for a view and must be given one.
+            self.log.exception("drawing an entry of the list")
+            return convert if convert is not None else View(androidui.activity())
+
+    def picture_for(self, entry, picture, icon_colour: str) -> None:
+        """A photo's thumbnail if there is one, or else an icon for what the
+        entry is."""
+        thumbnail = self.thumbs.get(entry.doc_id) if entry.is_photo else None
+        if thumbnail is not None:
+            picture.setScaleType(ScaleType.CENTER_CROP)
+            picture.setImageBitmap(thumbnail)
+        else:
+            kind = "folder" if entry.is_dir else "photo" if entry.is_photo else "file"
+            picture.setScaleType(ScaleType.CENTER_INSIDE)
+            picture.setImageBitmap(
+                self.icon(kind, TEXT if entry.is_dir else icon_colour)
+            )
 
     def new_row(self):
         context = androidui.activity()
@@ -219,18 +308,7 @@ class FileList:
         row.addView(name, beside)
         return row
 
-    def row_view(self, position: int, convert):
-        try:
-            row = convert if convert is not None else self.new_row()
-            row = cast(LinearLayout, row)
-            self.fill(row, self.rows[position])
-            return row
-        except Exception:
-            # Android asked for a row and must be given one.
-            self.log.exception("drawing a row of the list")
-            return convert if convert is not None else View(androidui.activity())
-
-    def fill(self, row, entry) -> None:
+    def fill_row(self, row, entry) -> None:
         mark = cast(ImageView, row.getChildAt(0))
         picture = cast(ImageView, row.getChildAt(1))
         name = cast(TextView, row.getChildAt(2))
@@ -238,17 +316,7 @@ class FileList:
         name.setText(entry.name)
         usable = entry.is_dir or entry.is_photo
         name.setTextColor(Color.parseColor(TEXT if usable else FAINT))
-
-        thumbnail = None
-        if entry.is_photo and entry.has_thumbnail:
-            thumbnail = self.thumbs.get(entry.doc_id)
-        if thumbnail is not None:
-            picture.setScaleType(ScaleType.CENTER_CROP)
-            picture.setImageBitmap(thumbnail)
-        else:
-            kind = "folder" if entry.is_dir else "photo" if entry.is_photo else "file"
-            picture.setScaleType(ScaleType.CENTER_INSIDE)
-            picture.setImageBitmap(self.icon(kind, TEXT if entry.is_dir else FAINT))
+        self.picture_for(entry, picture, FAINT)
 
         checked = entry.doc_id in self.checked
         if self.selectable and entry.is_photo:
@@ -262,6 +330,83 @@ class FileList:
             mark.setVisibility(View.INVISIBLE if self.selectable else View.GONE)
         row.setBackgroundColor(
             Color.parseColor(CHECKED_ROW) if checked else Color.TRANSPARENT
+        )
+
+    def new_tile(self):
+        context = androidui.activity()
+        tile = LinearLayout(context)
+        tile.setOrientation(LinearLayout.VERTICAL)
+        edge = androidui.dp(3)
+        tile.setPadding(edge, edge, edge, edge)
+        tile.setLayoutParams(AbsListLayout(FILL, WRAP))
+
+        frame = FrameLayout(context)
+        frame.setBackgroundColor(Color.parseColor(TILE))
+        tile.addView(frame, LinearLayoutParams(FILL, androidui.dp(150)))
+
+        picture = ImageView(context)
+        frame.addView(picture, FrameLayoutParams(FILL, FILL))
+
+        mark = ImageView(context)
+        # A dark disc behind the mark, so it shows on a pale photo.
+        disc = GradientDrawable()
+        disc.setShape(GradientDrawable.OVAL)
+        disc.setColor(Color.parseColor("#99000000"))
+        mark.setBackground(disc)
+        inset = androidui.dp(2)
+        mark.setPadding(inset, inset, inset, inset)
+        side = androidui.dp(MARK_DP + 6)
+        corner = FrameLayoutParams(side, side)
+        corner.gravity = Gravity.TOP | Gravity.START
+        corner.setMargins(androidui.dp(6), androidui.dp(6), 0, 0)
+        frame.addView(mark, corner)
+
+        name = TextView(context)
+        name.setSingleLine(True)
+        name.setEllipsize(TruncateAt.MIDDLE)
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13)
+        name.setPadding(androidui.dp(2), androidui.dp(4), androidui.dp(2), androidui.dp(2))
+        tile.addView(name, LinearLayoutParams(FILL, WRAP))
+        return tile
+
+    def tile_side(self) -> int:
+        """How wide Android has made each column, which is how tall the
+        picture in it should be: square."""
+        column = self.grid.getColumnWidth()
+        if column <= 0:
+            gap = androidui.dp(TILE_GAP_DP)
+            column = (self.grid.getWidth() - gap * (COLUMNS + 1)) // COLUMNS
+        if column <= 0:
+            column = androidui.dp(150)
+        return column - 2 * androidui.dp(3)
+
+    def fill_tile(self, tile, entry) -> None:
+        frame = cast(FrameLayout, tile.getChildAt(0))
+        name = cast(TextView, tile.getChildAt(1))
+        picture = cast(ImageView, frame.getChildAt(0))
+        mark = cast(ImageView, frame.getChildAt(1))
+
+        side = self.tile_side()
+        shape = frame.getLayoutParams()
+        if shape.height != side:
+            shape.height = side
+            frame.setLayoutParams(shape)
+
+        name.setText(entry.name)
+        usable = entry.is_dir or entry.is_photo
+        name.setTextColor(Color.parseColor(TEXT if usable else FAINT))
+        self.picture_for(entry, picture, FAINT)
+
+        checked = entry.doc_id in self.checked
+        if self.selectable and entry.is_photo:
+            mark.setVisibility(View.VISIBLE)
+            mark.setImageBitmap(
+                self.icon("checked", ACCENT) if checked else self.icon("unchecked", TEXT)
+            )
+        else:
+            mark.setVisibility(View.GONE)
+        tile.setBackgroundColor(
+            Color.parseColor(ACCENT) if checked else Color.TRANSPARENT
         )
 
     def pressed(self, position: int) -> None:

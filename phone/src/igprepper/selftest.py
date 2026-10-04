@@ -23,7 +23,7 @@ from PIL import Image
 from igprep.core import geometry as g
 
 from . import androidimage, androidui, framing, imagetests, places, storage, touch
-from .app import FIT_CHOICES, GUIDE_SECONDS
+from .app import FIT_CHOICES, GUIDE_SECONDS, LEAST_LIST_DP
 from .fixtures import FIXTURES
 
 FOLDER = "Download/IGprepper"
@@ -81,7 +81,12 @@ def names(browser) -> list[str]:
 def press_row(browser, name: str) -> None:
     """Press a row of a list the way a finger would."""
     position = names(browser).index(name)
-    browser.files.list.performItemClick(None, position, position)
+    browser.files.view.performItemClick(None, position, position)
+
+
+def path_shown(browser) -> str:
+    """The path beside a heading, as Android has it."""
+    return str(browser.path_view.getText())
 
 
 async def enter(app, browser, name: str) -> bool:
@@ -140,9 +145,9 @@ async def output_side(app) -> None:
 
     opened = await enter(app, target, TRIAL_FOLDER)
     verdict(
-        app, opened and target.path_label.text.endswith(TRIAL_FOLDER)
-        and is_on(target.up_btn),
-        f"Pressing a folder opened it: the path ends {target.path_label.text[-24:]!r} "
+        app, opened and is_on(target.up_btn)
+        and path_shown(target) == f"Internal storage/{FOLDER}/{TRIAL_FOLDER}",
+        f"Pressing a folder opened it: the path reads {path_shown(target)!r} "
         "and Up is available.",
     )
 
@@ -285,6 +290,29 @@ async def input_side(app) -> None:
         f"A folder of {len(source.entries)} files opened in {took:.2f} s with "
         f"{drawn} rows drawn, and scrolled to the last.",
     )
+
+    # The same folder as tiles, two across.
+    offered = source.view_btn._impl.native.getParent() is not None
+    source.view_btn._impl.native.performClick()
+    await asyncio.sleep(1)
+    grid = source.files.grid
+    tiles_drawn = grid.getChildCount()
+    verdict(
+        app, offered and source.tiled and source.files.view == grid
+        and grid.getNumColumns() == 2 and 0 < tiles_drawn < 30
+        and not source.files.list.isShown(),
+        f"Pressing the view button showed the folder as tiles: "
+        f"{grid.getNumColumns()} across, {tiles_drawn} drawn of {MANY}.",
+    )
+    await source.up()
+    stayed_list = not source.tiled and source.files.list.isShown()
+    await enter(app, source, MANY_FOLDER)
+    verdict(
+        app, stayed_list and source.tiled and grid.isShown(),
+        "The folder above is still a list, and coming back to this one it is "
+        "still tiles.",
+    )
+    source.toggle_view()
     await source.up()
 
     await enter(app, source, "Edits")
@@ -335,6 +363,38 @@ async def input_side(app) -> None:
     )
     await hold(app, "home")
 
+    # The checked photos, as tiles.
+    source.toggle_view()
+    large = await until(
+        lambda: all(
+            hasattr(cache.get(e.doc_id), "getWidth")
+            and cache[e.doc_id].getWidth() > 200
+            for e in photos
+        ),
+        20,
+    )
+    verdict(
+        app, large and len(source.checked) == 2
+        and str(source.files.counter.getText()) == "2 selected",
+        "As tiles the photos have larger pictures, and are still checked.",
+    )
+    await hold(app, "home-tiles")
+    source.toggle_view()
+    await divider(app)
+
+    # Something arrives in the folder while the app is not being looked at.
+    late = await app.work(
+        storage.create_file, target.tree, target.here, "arrived-later.txt", "text/plain"
+    )
+    app.reread_at = 0.0
+    app.returned()
+    noticed = await until(lambda: late.name in names(target) and late.name in names(source))
+    verdict(
+        app, noticed and len(source.checked) == 2,
+        "Coming back to the app, both lists picked up a file that had arrived "
+        "meanwhile, and kept what was checked.",
+    )
+
     # What is checked is always in view: leaving the folder lets it go.
     await source.up()
     verdict(
@@ -382,6 +442,10 @@ async def editor(app) -> None:
 
     log.section("Self-test: framing two photos")
     before = set(names(target))
+    verdict(
+        app, shown_text(app.process_btn) == "Frame selected photos",
+        f"The button between the lists reads {shown_text(app.process_btn)!r}.",
+    )
     app.process_btn._impl.native.performClick()
     opened = await until(
         lambda: app.main_window.content is app.editor_box and not app.busy
@@ -398,6 +462,10 @@ async def editor(app) -> None:
         f"The editor opened on {app.count_label.text!r} with "
         f"{shown_text(app.previous_btn)!r} and {shown_text(app.next_btn)!r} "
         f"available, and the save button reads {shown_text(app.save_btn)!r}.",
+    )
+    verdict(
+        app, app.border_value.text == "3%" and app.current_framing().border_pct == 3.0,
+        f"The frame starts at {app.border_value.text} of the picture's width.",
     )
     last = app.next_btn._impl.native
     verdict(
@@ -442,6 +510,12 @@ async def editor(app) -> None:
         "The photos that were processed are no longer checked.",
     )
     new = [e for e in target.entries if e.name not in before]
+    pictured = target.files.thumbs.cache
+    verdict(
+        app, bool(new) and all(hasattr(pictured.get(e.doc_id), "getWidth") for e in new),
+        "The files just saved have their pictures in the output list at once, "
+        "without waiting on the storage app.",
+    )
     listed_first = [e.name for e in target.entries if not e.is_dir][: len(new)]
     verdict(
         app, len(new) == 2 and set(listed_first) == {e.name for e in new}
@@ -662,6 +736,15 @@ async def leaving(app) -> None:
     )
     await hold(app, "editor-one-photo")
 
+    # An opened menu, to see that it stands apart from the one beside it.
+    app.fit_select._impl.native.performClick()
+    await hold(app, "editor-menu")
+    try:
+        await app.work(androidui.press_back)
+        await asyncio.sleep(0.5)
+    except Exception as problem:
+        log.write(f"INFO  The menu could not be closed by the Back key: {problem!r}")
+
     app.rotate(1)
     app.clear_guides()
     listening = app.back.listening
@@ -743,7 +826,55 @@ async def starting_again(app) -> None:
         app,
         target.tree is not None and storage.address(target.tree) == was["output"][0]
         and len(target.trail) == 1 and source.tree is None
-        and source.path_label.text == "No folder chosen",
+        and path_shown(source) == "No folder chosen",
         "With no record, the one folder an earlier version held became the "
         "output folder, and the input side asks for one.",
     )
+
+
+async def divider(app) -> None:
+    """Drag the divider between the lists, and try to drag it too far."""
+    log = app.log
+    log.section("Self-test: the divider")
+    from android.view import MotionEvent
+
+    handle = app.divider._impl.native
+    least = androidui.dp(LEAST_LIST_DP)
+    across = handle.getWidth() / 2
+
+    async def drag(down: float) -> tuple[int, int]:
+        began = touch.now()
+        touch.send(handle, MotionEvent.ACTION_DOWN, [(across, 10)], began)
+        for n in range(1, 5):
+            touch.send(
+                handle, MotionEvent.ACTION_MOVE, [(across, 10 + down * n / 4)], began
+            )
+            await asyncio.sleep(0.05)
+        touch.send(handle, MotionEvent.ACTION_UP, [(across, 10 + down)], began)
+        await asyncio.sleep(0.7)
+        return app.list_heights()
+
+    before = app.list_heights()
+    total = sum(before)
+    moved = await drag(60)
+    verdict(
+        app, abs(moved[0] - (before[0] + 60)) <= 3 and abs(sum(moved) - total) <= 3,
+        f"Dragging the divider 60 pixels down took the lists from {before} to "
+        f"{moved} pixels tall.",
+    )
+    low = await drag(9000)
+    await hold(app, "home-divider-low")
+    high = await drag(-9000)
+    verdict(
+        app, abs(low[1] - least) <= 3 and abs(high[0] - least) <= 3,
+        f"Dragged as far as it will go each way, {low[1]} pixels of the lower "
+        f"list and then {high[0]} of the upper remain: the least allowed is {least}.",
+    )
+    stored = app.views.split
+    verdict(
+        app, abs(stored - high[0] / total) < 0.02,
+        f"Where the divider was left is on record: {stored:.3f} of the way down.",
+    )
+    app.apply_split(0.5)
+    app.views.set_split(0.5)
+    await asyncio.sleep(0.5)
