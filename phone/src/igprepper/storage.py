@@ -235,8 +235,11 @@ def thumbnail(tree, doc_id: str, side: int):
     """A small square picture of a file, from the storage app; None if it
     has none to give. Slow for cloud storage: not for the screen's thread."""
     try:
+        # Asked for at twice the size and brought down here. A storage app
+        # may shrink a photo by simply discarding pixels, which looks rough;
+        # shrinking the last step properly smooths it.
         picture = DocumentsContract.getDocumentThumbnail(
-            resolver(), _doc_uri(tree, doc_id), Point(side, side), None
+            resolver(), _doc_uri(tree, doc_id), Point(2 * side, 2 * side), None
         )
     except Exception:
         return None

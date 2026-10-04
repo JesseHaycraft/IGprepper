@@ -87,9 +87,13 @@ class Browser:
             "", self.toggle_view, icon="tiles", width=52, margin_left=6
         )
         self.view_offered = False
-        self.tools = toga.Box(children=tools, style=Pack(direction=ROW, margin_top=2))
+        self.tools = toga.Box(
+            children=tools, style=Pack(direction=ROW, margin_top=2, margin_bottom=4)
+        )
 
-        self.holder = toga.Box(style=Pack(flex=1, margin_top=4))
+        # No margin of its own: the divider shares out the room between the
+        # two lists exactly, and a margin would be counted as part of one.
+        self.holder = toga.Box(style=Pack(flex=1))
         self.rows = [top, self.tools]
         self.path_view = None
         app.guard(f"building the {self.side} list", self.build_list)

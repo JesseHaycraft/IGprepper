@@ -363,20 +363,22 @@ async def input_side(app) -> None:
     )
     await hold(app, "home")
 
-    # The checked photos, as tiles.
+    # The checked photos, as tiles. Only the first row of tiles is on
+    # screen, and only what is on screen is fetched.
     source.toggle_view()
+    in_view = next(e for e in photos if e.name == LARGE_PHOTO)
     large = await until(
-        lambda: all(
-            hasattr(cache.get(e.doc_id), "getWidth")
-            and cache[e.doc_id].getWidth() > 200
-            for e in photos
-        ),
+        lambda: hasattr(cache.get(in_view.doc_id), "getWidth")
+        and cache[in_view.doc_id].getWidth() > 200,
         20,
     )
+    fetched = sum(1 for e in photos if hasattr(cache.get(e.doc_id), "getWidth"))
     verdict(
         app, large and len(source.checked) == 2
         and str(source.files.counter.getText()) == "2 selected",
-        "As tiles the photos have larger pictures, and are still checked.",
+        "As tiles, the photo in view has a picture "
+        + (f"{cache[in_view.doc_id].getWidth()} pixels square" if large else "NOT loaded")
+        + f" ({fetched} of 2 fetched), and both are still checked.",
     )
     await hold(app, "home-tiles")
     source.toggle_view()
@@ -858,7 +860,7 @@ async def divider(app) -> None:
     total = sum(before)
     moved = await drag(60)
     verdict(
-        app, abs(moved[0] - (before[0] + 60)) <= 3 and abs(sum(moved) - total) <= 3,
+        app, abs(moved[0] - (before[0] + 60)) <= 1 and abs(sum(moved) - total) <= 1,
         f"Dragging the divider 60 pixels down took the lists from {before} to "
         f"{moved} pixels tall.",
     )
@@ -866,7 +868,7 @@ async def divider(app) -> None:
     await hold(app, "home-divider-low")
     high = await drag(-9000)
     verdict(
-        app, abs(low[1] - least) <= 3 and abs(high[0] - least) <= 3,
+        app, abs(low[1] - least) <= 1 and abs(high[0] - least) <= 1,
         f"Dragged as far as it will go each way, {low[1]} pixels of the lower "
         f"list and then {high[0]} of the upper remain: the least allowed is {least}.",
     )
