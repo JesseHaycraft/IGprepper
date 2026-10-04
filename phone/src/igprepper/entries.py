@@ -37,6 +37,12 @@ class Entry:
             return False
         return self.mime in PHOTO_TYPES or self.name.lower().endswith(PHOTO_ENDINGS)
 
+    @property
+    def version(self) -> tuple:
+        """Something that changes when the file's contents do, as nearly as
+        the storage app lets on."""
+        return (self.modified, self.size)
+
 
 class StorageError(RuntimeError):
     """The storage app refused or failed an operation."""

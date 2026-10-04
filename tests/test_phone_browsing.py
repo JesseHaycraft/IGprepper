@@ -449,6 +449,143 @@ def test_the_number_kept_can_change_with_the_folder():
     run(scenario())
 
 
+# --- files that change while their folder is on screen ---------------------------
+
+class Retaken:
+    """A storage app whose picture of a file is of whatever the file is now."""
+
+    def __init__(self):
+        self.now = "first"
+        self.asked = 0
+
+    def __call__(self, key):
+        self.asked += 1
+        return None if self.now is None else f"{self.now} picture of {key}"
+
+
+def test_a_file_that_has_changed_gets_its_picture_again():
+    async def scenario():
+        arrivals = []
+        fetch = Retaken()
+        thumbs = Thumbnails(asyncio.get_running_loop(), lambda: arrivals.append(1))
+        thumbs.start(fetch)
+        thumbs.get("a", (100, 5000))
+        await settle(thumbs)
+        assert thumbs.get("a", (100, 5000)) == "first picture of a"
+
+        fetch.now = "second"
+        # The old picture stays up while the new one is on its way.
+        assert thumbs.get("a", (200, 6000)) == "first picture of a"
+        await settle(thumbs)
+        assert thumbs.get("a", (200, 6000)) == "second picture of a"
+        assert fetch.asked == 2 and arrivals == [1, 1]
+
+    run(scenario())
+
+
+def test_a_file_that_has_not_changed_is_not_asked_about_again():
+    async def scenario():
+        fetch = Retaken()
+        thumbs = Thumbnails(asyncio.get_running_loop(), lambda: None)
+        thumbs.start(fetch)
+        for _ in range(4):
+            thumbs.get("a", (100, 5000))
+            await settle(thumbs)
+        assert fetch.asked == 1
+
+    run(scenario())
+
+
+def test_a_changed_file_with_no_picture_yet_stops_showing_the_old_one():
+    async def scenario():
+        clock = Clock(asyncio.get_running_loop())
+        arrivals = []
+        fetch = Retaken()
+        thumbs = Thumbnails(clock, lambda: arrivals.append(1))
+        thumbs.start(fetch)
+        thumbs.get("a", 1)
+        await settle(thumbs)
+
+        fetch.now = None  # the storage app has nothing for the new file yet
+        thumbs.get("a", 2)
+        await settle(thumbs)
+        assert thumbs.get("a", 2) is None
+        assert arrivals == [1, 1], "the row is redrawn, to take the old picture down"
+
+        # And it is asked for again later, like any picture that is not there.
+        clock.ahead = 5
+        fetch.now = "second"
+        thumbs.get("a", 2)
+        await settle(thumbs)
+        assert thumbs.get("a", 2) == "second picture of a"
+
+    run(scenario())
+
+
+def test_a_missing_picture_is_asked_for_at_once_when_its_file_changes():
+    async def scenario():
+        clock = Clock(asyncio.get_running_loop())
+        fetch = Retaken()
+        fetch.now = None
+        thumbs = Thumbnails(clock, lambda: None)
+        thumbs.start(fetch)
+        thumbs.get("a", 1)
+        await settle(thumbs)
+        thumbs.get("a", 1)  # too soon to ask again about the same file
+        await settle(thumbs)
+        assert fetch.asked == 1
+
+        fetch.now = "second"
+        thumbs.get("a", 2)  # but not about a different one
+        await settle(thumbs)
+        assert fetch.asked == 2 and thumbs.get("a", 2) == "second picture of a"
+
+    run(scenario())
+
+
+def test_a_supplied_picture_is_of_the_file_as_first_listed():
+    async def scenario():
+        fetch = Retaken()
+        thumbs = Thumbnails(asyncio.get_running_loop(), lambda: None)
+        thumbs.start(fetch)
+        thumbs.put("saved", "the picture itself")
+        for _ in range(3):
+            assert thumbs.get("saved", (100, 5000)) == "the picture itself"
+            await settle(thumbs)
+        assert fetch.asked == 0
+
+        thumbs.get("saved", (200, 6000))  # changed since, by something else
+        await settle(thumbs)
+        assert thumbs.get("saved", (200, 6000)) == "first picture of saved"
+
+    run(scenario())
+
+
+def test_versions_are_forgotten_along_with_their_pictures():
+    async def scenario():
+        thumbs = Thumbnails(asyncio.get_running_loop(), lambda: None, keep=2)
+        thumbs.start(Retaken())
+        for key in "abc":
+            thumbs.get(key, 1)
+            await settle(thumbs)
+        assert set(thumbs.versions) == set(thumbs.cache) and len(thumbs.cache) == 2
+        thumbs.start(Retaken())
+        assert not thumbs.versions
+
+    run(scenario())
+
+
+def test_an_entry_is_a_different_version_when_its_time_or_size_changes():
+    from igprepper.entries import Entry
+
+    def photo(modified, size):
+        return Entry("id", "a.jpg", False, size, 0, "image/jpeg", modified)
+
+    assert photo(100, 5000).version == photo(100, 5000).version
+    assert photo(100, 5000).version != photo(200, 5000).version
+    assert photo(100, 5000).version != photo(100, 6000).version
+
+
 # --- how the screen was left ------------------------------------------------------
 
 from igprepper.views import Views, divide  # noqa: E402

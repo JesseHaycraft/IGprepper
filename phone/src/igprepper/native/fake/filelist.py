@@ -1,7 +1,8 @@
 """A list that only remembers what it was told to show.
 
 For tests: `rows`, `checked`, `tiles`, `note` and `counter` are what would
-be on screen, and `press(name)` is a finger on one row.
+be on screen, `picture(name)` is one row being drawn, and `press(name)` is
+a finger on one row.
 """
 
 from __future__ import annotations
@@ -50,6 +51,12 @@ class FileList:
 
     def names(self) -> list[str]:
         return [row.name for row in self.rows]
+
+    def picture(self, name: str):
+        """One row being drawn: the picture it would show beside the name,
+        or None while there is not one to show."""
+        row = next(row for row in self.rows if row.name == name)
+        return self.thumbs.get(row.doc_id, row.version) if row.is_photo else None
 
     def press(self, name: str) -> None:
         self.on_press(next(row for row in self.rows if row.name == name))

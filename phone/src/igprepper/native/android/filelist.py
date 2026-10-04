@@ -276,7 +276,9 @@ class FileList:
         name.setText(entry.name)
         name.setTextColor(TEXT if entry.is_dir or entry.is_photo else FAINT)
 
-        thumbnail = self.thumbs.get(entry.doc_id) if entry.is_photo else None
+        thumbnail = (
+            self.thumbs.get(entry.doc_id, entry.version) if entry.is_photo else None
+        )
         if thumbnail is not None:
             picture.setScaleType(ScaleType.CENTER_CROP)
             picture.setImageBitmap(thumbnail)

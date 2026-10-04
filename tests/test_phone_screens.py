@@ -311,6 +311,47 @@ def test_coming_back_to_the_app_reads_both_folders_again(phone):
     assert "arrived.txt" in app.target.files.names()
 
 
+def drawn(phone, files, name):
+    """Draw one row as the screen does, again and again until its picture
+    has arrived and nothing more is on its way."""
+
+    async def until_settled():
+        for _ in range(500):
+            picture = files.picture(name)
+            thumbs = files.thumbs
+            if picture is not None and not thumbs.waiting and not thumbs.fetching:
+                return picture
+            await asyncio.sleep(0.01)
+        raise AssertionError("no picture arrived")
+
+    return phone.app.loop.run_until_complete(until_settled())
+
+
+def roughly(pixel, colour) -> bool:
+    return all(abs(a - b) <= 12 for a, b in zip(pixel, colour))
+
+
+def test_a_photo_replaced_while_its_folder_is_open_gets_a_new_picture(phone):
+    app = phone.ready("a.jpg")
+    files = app.source.files
+    assert roughly(drawn(phone, files, "a.jpg").getpixel((10, 10)), (40, 90, 160))
+
+    # Another app puts a different photo in its place, under the same name.
+    phone.photo("a.jpg", size=(1000, 800), colour=(200, 60, 30))
+    app.reread_at = 0.0
+    phone.do(press=ui.returns[-1].action)
+    assert roughly(drawn(phone, files, "a.jpg").getpixel((10, 10)), (200, 60, 30))
+
+
+def test_a_photo_left_alone_keeps_its_picture_across_a_re_read(phone):
+    app = phone.ready("a.jpg")
+    files = app.source.files
+    before = drawn(phone, files, "a.jpg")
+    app.reread_at = 0.0
+    phone.do(press=ui.returns[-1].action)
+    assert files.picture("a.jpg") is before, "not fetched a second time"
+
+
 # --- remembering -----------------------------------------------------------------------
 
 def test_both_folders_are_where_they_were_left_at_the_next_launch(phone):
